@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-type OverlayAppearance = "glass" | "solid";
+type OverlayAppearance = "pixelate" | "solid";
 type ResizeDirection =
   | "East"
   | "North"
@@ -18,6 +18,8 @@ type OverlayState = {
   locked: boolean;
   alwaysOnTop: boolean;
   autoCenter: boolean;
+  refreshRate: number;
+  pixelDetail: "coarse" | "medium" | "fine";
   opacity: number;
   appearance: OverlayAppearance;
   color: string;
@@ -28,6 +30,7 @@ type OverlayState = {
 };
 
 const EVENT_STATE_CHANGED = "overlay://state";
+const EVENT_PIXEL_FRAME = "overlay://pixel-frame";
 const appWindow = getCurrentWindow();
 
 let state: OverlayState;
@@ -41,7 +44,8 @@ if (!app) {
 
 app.innerHTML = `
   <main class="shell">
-    <section id="overlay" class="overlay" data-appearance="glass">
+    <section id="overlay" class="overlay" data-appearance="pixelate">
+      <div id="pixelLayer" class="pixel-layer" aria-hidden="true"></div>
       <div class="drag-handle">
         <div class="mode-chip">
           <span class="mode-dot"></span>
@@ -71,6 +75,7 @@ function requireElement<T extends HTMLElement>(selector: string): T {
 }
 
 const overlayEl = requireElement<HTMLElement>("#overlay");
+const pixelLayerEl = requireElement<HTMLElement>("#pixelLayer");
 const modeLabelEl = requireElement<HTMLElement>("#modeLabel");
 const hintTextEl = requireElement<HTMLElement>("#hintText");
 
@@ -129,6 +134,14 @@ function bindWindowEvents() {
     render();
   });
 
+  void listen<{ dataUrl: string }>(EVENT_PIXEL_FRAME, (event) => {
+    if (state.appearance !== "pixelate") {
+      return;
+    }
+
+    pixelLayerEl.style.backgroundImage = `url("${event.payload.dataUrl}")`;
+  });
+
   void appWindow.onMoved(async ({ payload }) => {
     const scaleFactor = await appWindow.scaleFactor();
     state.x = state.autoCenter ? null : payload.x / scaleFactor;
@@ -149,6 +162,12 @@ function render() {
   overlayEl.dataset.appearance = state.appearance;
   overlayEl.style.setProperty("--overlay-rgb", hexToRgbTriplet(state.color));
   overlayEl.style.setProperty("--overlay-opacity", state.opacity.toFixed(2));
+  pixelLayerEl.style.opacity =
+    state.appearance === "pixelate" ? state.opacity.toFixed(2) : "0";
+
+  if (state.appearance !== "pixelate") {
+    pixelLayerEl.style.backgroundImage = "";
+  }
 
   modeLabelEl.textContent = state.locked ? "锁定中" : "编辑中";
   hintTextEl.textContent = state.locked
