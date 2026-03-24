@@ -1,0 +1,360 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 500;
+  --overlay-rgb: 13 17 23;
+  --overlay-opacity: 0.82;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  background: none;
+}
+
+.shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.overlay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background-color: rgb(var(--overlay-rgb) / calc(var(--overlay-opacity) * 0.28));
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+  cursor: grab;
+}
+
+.overlay[data-appearance="glass"] {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.18),
+      rgba(255, 255, 255, 0.08)
+    ),
+    rgb(var(--overlay-rgb) / calc(var(--overlay-opacity) * 0.3));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.overlay[data-appearance="solid"] {
+  border: 0;
+  box-shadow: none;
+  background-color: rgb(var(--overlay-rgb) / var(--overlay-opacity));
+}
+
+.overlay:active {
+  cursor: grabbing;
+}
+
+html[data-locked="true"] .overlay {
+  border-radius: 12px;
+}
+
+.drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 42px;
+  padding: 12px 16px;
+}
+
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.mode-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ffd166;
+  box-shadow: 0 0 20px rgba(255, 209, 102, 0.85);
+}
+
+html[data-locked="true"] .mode-dot {
+  background: #8cf0a0;
+  box-shadow: 0 0 20px rgba(140, 240, 160, 0.85);
+}
+
+.hint-text {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-align: right;
+}
+
+html[data-locked="true"] .drag-handle,
+html[data-locked="true"] .resize-handle {
+  display: none;
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+
+.resize-handle.north,
+.resize-handle.south {
+  left: 18px;
+  right: 18px;
+  height: 14px;
+}
+
+.resize-handle.north {
+  top: 0;
+  cursor: n-resize;
+}
+
+.resize-handle.south {
+  bottom: 0;
+  cursor: s-resize;
+}
+
+.resize-handle.east,
+.resize-handle.west {
+  top: 18px;
+  bottom: 18px;
+  width: 14px;
+}
+
+.resize-handle.east {
+  right: 0;
+  cursor: e-resize;
+}
+
+.resize-handle.west {
+  left: 0;
+  cursor: w-resize;
+}
+
+.resize-handle.north-east,
+.resize-handle.north-west,
+.resize-handle.south-east,
+.resize-handle.south-west {
+  width: 20px;
+  height: 20px;
+}
+
+.resize-handle.north-east {
+  top: 0;
+  right: 0;
+  cursor: ne-resize;
+}
+
+.resize-handle.north-west {
+  top: 0;
+  left: 0;
+  cursor: nw-resize;
+}
+
+.resize-handle.south-east {
+  right: 0;
+  bottom: 0;
+  cursor: se-resize;
+}
+
+.resize-handle.south-west {
+  left: 0;
+  bottom: 0;
+  cursor: sw-resize;
+}
+
+.context-menu {
+  position: absolute;
+  z-index: 10;
+  width: 264px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(21, 26, 34, 0.94), rgba(12, 16, 22, 0.94));
+  box-shadow:
+    0 20px 44px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(22px);
+}
+
+.context-menu.is-hidden {
+  display: none;
+}
+
+.menu-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.menu-title-row,
+.menu-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 8px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.menu-value {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
+}
+
+.menu-button,
+.choice-button {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    transform 120ms ease;
+  font-size: 12px;
+}
+
+.menu-button + .menu-button {
+  margin-top: 6px;
+}
+
+.menu-button:hover,
+.choice-button:hover,
+.swatch:hover,
+.color-picker:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.menu-button:active,
+.choice-button:active,
+.swatch:active,
+.color-picker:active {
+  transform: translateY(1px);
+}
+
+.menu-button.danger {
+  margin-top: 12px;
+  background: rgba(255, 85, 85, 0.14);
+  color: #ffb4b4;
+}
+
+.choice-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.choice-row.compact {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.choice-button {
+  font-size: 12px;
+}
+
+.choice-button.mini {
+  padding: 7px 5px;
+  font-size: 11px;
+}
+
+.choice-button[data-active="true"] {
+  background: rgba(157, 196, 255, 0.22);
+  color: #d6e7ff;
+}
+
+.slider {
+  width: 100%;
+  accent-color: #9dc4ff;
+  cursor: pointer;
+}
+
+.swatch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--swatch);
+  outline: 1px solid rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+}
+
+.swatch[data-active="true"] {
+  outline: 2px solid #9dc4ff;
+  outline-offset: 2px;
+}
+
+.color-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.color-picker input {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
