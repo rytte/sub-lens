@@ -16,6 +16,7 @@ type ResizeDirection =
 type OverlayState = {
   visible: boolean;
   locked: boolean;
+  clickThroughWhenLocked: boolean;
   alwaysOnTop: boolean;
   autoCenter: boolean;
   refreshRate: number;
@@ -117,7 +118,7 @@ function bindUi() {
   document.addEventListener("contextmenu", (event) => {
     event.preventDefault();
 
-    if (state.locked) {
+    if (state.locked && state.clickThroughWhenLocked) {
       return;
     }
 
@@ -171,7 +172,9 @@ function render() {
 
   modeLabelEl.textContent = state.locked ? "锁定中" : "编辑中";
   hintTextEl.textContent = state.locked
-    ? "从托盘菜单恢复编辑"
+    ? state.clickThroughWhenLocked
+      ? "锁定且已穿透 · 从托盘菜单恢复编辑"
+      : "锁定但不穿透 · 右键仍可打开菜单"
     : state.autoCenter
       ? "自动水平居中已开启 · 可上下拖动 · Ctrl+Alt+H 显示隐藏"
       : "右键打开系统菜单 · 拖动移动 · 边缘缩放 · Ctrl+Alt+H 显示隐藏";

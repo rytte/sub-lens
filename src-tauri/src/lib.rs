@@ -23,11 +23,11 @@ const TRAY_ID: &str = "overlay-tray";
 const DEFAULT_WIDTH: f64 = 720.0;
 const DEFAULT_HEIGHT: f64 = 132.0;
 const MIN_WIDTH: f64 = 280.0;
-const MIN_HEIGHT: f64 = 72.0;
+const MIN_HEIGHT: f64 = 36.0;
 
 const MENU_TOGGLE_VISIBLE: &str = "toggle_visible";
 const MENU_TOGGLE_LOCK: &str = "toggle_lock";
-const MENU_EDIT_MODE: &str = "edit_mode";
+const MENU_TOGGLE_CLICK_THROUGH: &str = "toggle_click_through";
 const MENU_TOGGLE_AUTO_CENTER: &str = "toggle_auto_center";
 const MENU_REFRESH_RATE_5: &str = "refresh_rate_5";
 const MENU_REFRESH_RATE_10: &str = "refresh_rate_10";
@@ -91,6 +91,7 @@ struct PixelFramePayload {
 struct OverlayStatePayload {
     visible: bool,
     locked: bool,
+    click_through_when_locked: bool,
     always_on_top: bool,
     auto_center: bool,
     refresh_rate: u32,
@@ -109,6 +110,7 @@ impl Default for OverlayStatePayload {
         Self {
             visible: true,
             locked: false,
+            click_through_when_locked: false,
             always_on_top: true,
             auto_center: false,
             refresh_rate: 5,
@@ -278,7 +280,7 @@ fn apply_window_state(app: &AppHandle, overlay: &OverlayStatePayload) -> Result<
         .set_always_on_top(overlay.always_on_top)
         .map_err(|err| err.to_string())?;
     window
-        .set_ignore_cursor_events(overlay.locked)
+        .set_ignore_cursor_events(overlay.locked && overlay.click_through_when_locked)
         .map_err(|err| err.to_string())?;
     window
         .set_content_protected(matches!(
@@ -345,10 +347,9 @@ fn toggle_lock(app: &AppHandle) -> Result<OverlayStatePayload, String> {
     })
 }
 
-fn enter_edit_mode_inner(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, true, |shared| {
-        shared.overlay.visible = true;
-        shared.overlay.locked = false;
+fn toggle_click_through(app: &AppHandle) -> Result<OverlayStatePayload, String> {
+    update_overlay_state(app, true, false, |shared| {
+        shared.overlay.click_through_when_locked = !shared.overlay.click_through_when_locked;
     })
 }
 
@@ -445,8 +446,14 @@ fn build_overlay_menu(
         true,
         Some("Ctrl+Alt+Space"),
     )?;
-    let edit_mode =
-        MenuItem::with_id(app, MENU_EDIT_MODE, "进入编辑模式", true, None::<&str>)?;
+    let click_through = CheckMenuItem::with_id(
+        app,
+        MENU_TOGGLE_CLICK_THROUGH,
+        "锁定时点击穿透",
+        true,
+        overlay.click_through_when_locked,
+        None::<&str>,
+    )?;
     let auto_center = CheckMenuItem::with_id(
         app,
         MENU_TOGGLE_AUTO_CENTER,
@@ -665,7 +672,7 @@ fn build_overlay_menu(
     let items: [&dyn IsMenuItem<tauri::Wry>; 13] = [
         &visibility,
         &lock,
-        &edit_mode,
+        &click_through,
         &auto_center,
         &separator_a,
         &refresh_rate_menu,
@@ -687,7 +694,7 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
     let result = match id {
         MENU_TOGGLE_VISIBLE => toggle_visibility(app),
         MENU_TOGGLE_LOCK => toggle_lock(app),
-        MENU_EDIT_MODE => enter_edit_mode_inner(app),
+        MENU_TOGGLE_CLICK_THROUGH => toggle_click_through(app),
         MENU_TOGGLE_AUTO_CENTER => toggle_auto_center(app),
         MENU_REFRESH_RATE_5 => set_refresh_rate(app, 5),
         MENU_REFRESH_RATE_10 => set_refresh_rate(app, 10),
@@ -757,11 +764,6 @@ fn toggle_overlay_visibility(app: AppHandle) -> Result<OverlayStatePayload, Stri
 #[tauri::command]
 fn toggle_overlay_lock(app: AppHandle) -> Result<OverlayStatePayload, String> {
     toggle_lock(&app)
-}
-
-#[tauri::command]
-fn enter_edit_mode(app: AppHandle) -> Result<OverlayStatePayload, String> {
-    enter_edit_mode_inner(&app)
 }
 
 #[tauri::command]
@@ -946,7 +948,6 @@ pub fn run() {
             apply_overlay_state,
             toggle_overlay_visibility,
             toggle_overlay_lock,
-            enter_edit_mode,
             toggle_overlay_on_top,
             reset_overlay_position,
             show_overlay_menu,
