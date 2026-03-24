@@ -11,9 +11,18 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager,
 };
-use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
 use xcap::Monitor;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute,
+};
 
 const EVENT_STATE_CHANGED: &str = "overlay://state";
 const EVENT_PIXEL_FRAME: &str = "overlay://pixel-frame";
@@ -24,6 +33,7 @@ const DEFAULT_WIDTH: f64 = 720.0;
 const DEFAULT_HEIGHT: f64 = 132.0;
 const MIN_WIDTH: f64 = 280.0;
 const MIN_HEIGHT: f64 = 36.0;
+const CTRL_HIDE_POLL_INTERVAL_MS: u64 = 16;
 
 const MENU_TOGGLE_VISIBLE: &str = "toggle_visible";
 const MENU_TOGGLE_LOCK: &str = "toggle_lock";
@@ -129,11 +139,15 @@ impl Default for OverlayStatePayload {
 #[derive(Debug)]
 struct SharedState {
     overlay: OverlayStatePayload,
+    ctrl_pressed: bool,
 }
 
 impl SharedState {
-    fn new(overlay: OverlayStatePayload) -> Self {
-        Self { overlay }
+    fn new(overlay: OverlayStatePayload, ctrl_pressed: bool) -> Self {
+        Self {
+            overlay,
+            ctrl_pressed,
+        }
     }
 }
 
@@ -251,7 +265,55 @@ fn centered_horizontal_position(
     Ok(Some(LogicalPosition::new(centered_x, y)))
 }
 
-fn apply_window_state(app: &AppHandle, overlay: &OverlayStatePayload) -> Result<(), String> {
+fn effective_overlay_visibility(overlay: &OverlayStatePayload, ctrl_pressed: bool) -> bool {
+    overlay.visible && !ctrl_pressed
+}
+
+fn apply_window_visibility(
+    window: &tauri::WebviewWindow,
+    visible: bool,
+) -> Result<(), String> {
+    if visible {
+        window.show().map_err(|err| err.to_string())?;
+    } else {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn disable_window_transitions(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|err| err.to_string())?;
+    let transitions_disabled: i32 = 1;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            &transitions_disabled as *const _ as _,
+            std::mem::size_of_val(&transitions_disabled) as u32,
+        )
+    };
+
+    if result < 0 {
+        return Err(format!(
+            "failed to disable window transitions: HRESULT {result}"
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn disable_window_transitions(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
+fn apply_window_state(
+    app: &AppHandle,
+    overlay: &OverlayStatePayload,
+    ctrl_pressed: bool,
+) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
@@ -291,13 +353,7 @@ fn apply_window_state(app: &AppHandle, overlay: &OverlayStatePayload) -> Result<
     window.set_effects(None::<tauri::utils::config::WindowEffectsConfig>)
         .map_err(|err| err.to_string())?;
 
-    if overlay.visible {
-        window.show().map_err(|err| err.to_string())?;
-    } else {
-        window.hide().map_err(|err| err.to_string())?;
-    }
-
-    Ok(())
+    apply_window_visibility(&window, effective_overlay_visibility(overlay, ctrl_pressed))
 }
 
 fn update_overlay_state<F>(
@@ -309,15 +365,15 @@ fn update_overlay_state<F>(
 where
     F: FnOnce(&mut SharedState),
 {
-    let overlay = {
+    let (overlay, ctrl_pressed) = {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
         updater(&mut shared);
         shared.overlay = sanitize_state(shared.overlay.clone());
-        shared.overlay.clone()
+        (shared.overlay.clone(), shared.ctrl_pressed)
     };
 
-    apply_window_state(app, &overlay)?;
+    apply_window_state(app, &overlay, ctrl_pressed)?;
 
     if persist {
         save_state(app, &overlay)?;
@@ -333,6 +389,26 @@ where
     }
 
     Ok(overlay)
+}
+
+fn set_ctrl_pressed(app: &AppHandle, ctrl_pressed: bool) -> Result<(), String> {
+    let effective_visible = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+
+        if shared.ctrl_pressed == ctrl_pressed {
+            return Ok(());
+        }
+
+        shared.ctrl_pressed = ctrl_pressed;
+        effective_overlay_visibility(&shared.overlay, shared.ctrl_pressed)
+    };
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "找不到遮挡窗口".to_string())?;
+
+    apply_window_visibility(&window, effective_visible)
 }
 
 fn toggle_visibility(app: &AppHandle) -> Result<OverlayStatePayload, String> {
@@ -428,22 +504,30 @@ fn build_overlay_menu(
         app,
         MENU_TOGGLE_VISIBLE,
         if overlay.visible {
-            "隐藏遮挡条"
+            "隐藏"
         } else {
-            "显示遮挡条"
+            "显示"
         },
         true,
         Some("Ctrl+Alt+H"),
     )?;
-    let lock = MenuItem::with_id(
+    let _lock_legacy = MenuItem::with_id(
         app,
-        MENU_TOGGLE_LOCK,
+        "toggle_lock_legacy_unused",
         if overlay.locked {
-            "解锁遮挡条"
+            "解锁"
         } else {
-            "锁定遮挡条"
+            "锁定"
         },
         true,
+        None::<&str>,
+    )?;
+    let lock = CheckMenuItem::with_id(
+        app,
+        MENU_TOGGLE_LOCK,
+        "锁定",
+        true,
+        overlay.locked,
         Some("Ctrl+Alt+Space"),
     )?;
     let click_through = CheckMenuItem::with_id(
@@ -487,7 +571,7 @@ fn build_overlay_menu(
         MENU_OPACITY_40,
         "40%",
         true,
-        is_opacity_selected(overlay.opacity, 0.4),
+        is_opacity_selected(overlay.opacity, 0.4), 
         None::<&str>,
     )?;
     let opacity_60 = CheckMenuItem::with_id(
@@ -675,10 +759,10 @@ fn build_overlay_menu(
         &click_through,
         &auto_center,
         &separator_a,
+        &appearance_menu,
         &refresh_rate_menu,
         &pixel_detail_menu,
         &opacity_menu,
-        &appearance_menu,
         &color_menu,
         &separator_b,
         &always_on_top,
@@ -857,6 +941,69 @@ fn start_pixelate_loop(app: AppHandle) {
     });
 }
 
+#[cfg(target_os = "windows")]
+fn is_virtual_key_pressed(virtual_key: i32) -> bool {
+    unsafe { (GetAsyncKeyState(virtual_key) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(target_os = "windows")]
+fn current_ctrl_hide_active() -> bool {
+    let ctrl_pressed =
+        is_virtual_key_pressed(VK_LCONTROL as i32) || is_virtual_key_pressed(VK_RCONTROL as i32);
+    let alt_pressed =
+        is_virtual_key_pressed(VK_MENU as i32)
+            || is_virtual_key_pressed(VK_LMENU as i32)
+            || is_virtual_key_pressed(VK_RMENU as i32);
+    let shift_pressed =
+        is_virtual_key_pressed(VK_SHIFT as i32)
+            || is_virtual_key_pressed(VK_LSHIFT as i32)
+            || is_virtual_key_pressed(VK_RSHIFT as i32);
+    let win_pressed =
+        is_virtual_key_pressed(VK_LWIN as i32) || is_virtual_key_pressed(VK_RWIN as i32);
+
+    ctrl_pressed && !alt_pressed && !shift_pressed && !win_pressed
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_ctrl_hide_active() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn current_ctrl_pressed() -> bool {
+    current_ctrl_hide_active()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_ctrl_pressed() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn start_ctrl_hold_loop(app: AppHandle) {
+    thread::spawn(move || {
+        let mut last_ctrl_pressed = current_ctrl_pressed();
+
+        loop {
+            thread::sleep(Duration::from_millis(CTRL_HIDE_POLL_INTERVAL_MS));
+
+            let ctrl_pressed = current_ctrl_pressed();
+            if ctrl_pressed == last_ctrl_pressed {
+                continue;
+            }
+
+            last_ctrl_pressed = ctrl_pressed;
+
+            if let Err(err) = set_ctrl_pressed(&app, ctrl_pressed) {
+                eprintln!("ctrl hold handler failed: {err}");
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_ctrl_hold_loop(_app: AppHandle) {}
+
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let overlay = current_overlay_state(app).map_err(|err| err.to_string())?;
     let menu = build_overlay_menu(app, &overlay)?;
@@ -892,9 +1039,6 @@ fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let toggle_visibility_shortcut = Shortcut::try_from("ctrl+alt+h")?;
     let toggle_lock_shortcut = Shortcut::try_from("ctrl+alt+space")?;
 
-    let toggle_visibility_for_handler = toggle_visibility_shortcut;
-    let toggle_lock_for_handler = toggle_lock_shortcut;
-
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_shortcuts([toggle_visibility_shortcut, toggle_lock_shortcut])?
@@ -903,9 +1047,9 @@ fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
 
-                let result = if shortcut == &toggle_visibility_for_handler {
+                let result = if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::KeyH) {
                     toggle_visibility(app)
-                } else if shortcut == &toggle_lock_for_handler {
+                } else if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Space) {
                     toggle_lock(app)
                 } else {
                     return;
@@ -931,12 +1075,21 @@ pub fn run() {
         })
         .setup(|app| {
             let overlay = load_saved_state(app.handle());
-            app.manage(AppState(Mutex::new(SharedState::new(overlay.clone()))));
+            let ctrl_pressed = current_ctrl_pressed();
+            app.manage(AppState(Mutex::new(SharedState::new(
+                overlay.clone(),
+                ctrl_pressed,
+            ))));
 
-            apply_window_state(app.handle(), &overlay)?;
+            if let Some(window) = app.get_webview_window("main") {
+                disable_window_transitions(&window)?;
+            }
+
+            apply_window_state(app.handle(), &overlay, ctrl_pressed)?;
             emit_state(app.handle(), &overlay)?;
             setup_tray(app.handle())?;
             start_pixelate_loop(app.handle().clone());
+            start_ctrl_hold_loop(app.handle().clone());
 
             #[cfg(desktop)]
             setup_shortcuts(app.handle())?;
