@@ -52,7 +52,7 @@ app.innerHTML = `
           <span class="mode-dot"></span>
           <span id="modeLabel">编辑中</span>
         </div>
-        <p id="hintText" class="hint-text">右键打开系统菜单 · 拖动移动 · 边缘缩放 · Ctrl+Alt+H 显示隐藏</p>
+        <p id="hintText" class="hint-text">右键打开系统菜单 · Ctrl+Shift+E 编辑 OCR 区域 · Ctrl+Shift+J 解析当前字幕</p>
       </div>
       <button class="resize-handle north" data-direction="North" aria-label="向上调整"></button>
       <button class="resize-handle south" data-direction="South" aria-label="向下调整"></button>
@@ -176,8 +176,8 @@ function render() {
       ? "锁定且已穿透 · 从托盘菜单恢复编辑"
       : "锁定但不穿透 · 右键仍可打开菜单"
     : state.autoCenter
-      ? "自动水平居中已开启 · 可上下拖动 · Ctrl+Alt+H 显示隐藏"
-      : "右键打开系统菜单 · 拖动移动 · 边缘缩放 · Ctrl+Alt+H 显示隐藏";
+      ? "自动水平居中已开启 · 可上下拖动 · Ctrl+Shift+E 编辑 OCR 区域"
+      : "右键打开系统菜单 · Ctrl+Shift+E 编辑 OCR 区域 · Ctrl+Shift+J 解析当前字幕";
 }
 
 function scheduleGeometrySync() {

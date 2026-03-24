@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+button {
+  border: 0;
+  font: inherit;
+}
+
+.region-shell {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.region {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border: 2px dashed rgba(141, 190, 255, 0.92);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(141, 190, 255, 0.12), rgba(141, 190, 255, 0.06)),
+    rgba(7, 12, 18, 0.14);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 16px 36px rgba(0, 0, 0, 0.22);
+  cursor: move;
+}
+
+.region-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #d9e9ff;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hint {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.done-button {
+  min-width: 72px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #08111d;
+  background: linear-gradient(180deg, #c7dcff 0%, #8eb8ff 100%);
+  cursor: pointer;
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+
+.resize-handle.north,
+.resize-handle.south {
+  left: 18px;
+  right: 18px;
+  height: 14px;
+}
+
+.resize-handle.north {
+  top: 0;
+  cursor: n-resize;
+}
+
+.resize-handle.south {
+  bottom: 0;
+  cursor: s-resize;
+}
+
+.resize-handle.east,
+.resize-handle.west {
+  top: 18px;
+  bottom: 18px;
+  width: 14px;
+}
+
+.resize-handle.east {
+  right: 0;
+  cursor: e-resize;
+}
+
+.resize-handle.west {
+  left: 0;
+  cursor: w-resize;
+}
+
+.resize-handle.north-east,
+.resize-handle.north-west,
+.resize-handle.south-east,
+.resize-handle.south-west {
+  width: 22px;
+  height: 22px;
+}
+
+.resize-handle.north-east {
+  top: 0;
+  right: 0;
+  cursor: ne-resize;
+}
+
+.resize-handle.north-west {
+  top: 0;
+  left: 0;
+  cursor: nw-resize;
+}
+
+.resize-handle.south-east {
+  right: 0;
+  bottom: 0;
+  cursor: se-resize;
+}
+
+.resize-handle.south-west {
+  left: 0;
+  bottom: 0;
+  cursor: sw-resize;
+}
