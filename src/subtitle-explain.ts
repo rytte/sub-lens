@@ -3,9 +3,17 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+const FONT_SCALE_VALUES = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] as const;
+const DEFAULT_FONT_SCALE = FONT_SCALE_VALUES[0];
+const LEGACY_FONT_SCALE_MAP = {
+  normal: "1.0",
+  large: "1.1",
+  xlarge: "1.2",
+} as const;
+
 type ResizeDirection = "East" | "West";
 type StyleMode = "default" | "contrast";
-type FontScale = "normal" | "large" | "xlarge";
+type FontScale = (typeof FONT_SCALE_VALUES)[number];
 type ExplainMode = "phrase" | "word";
 type SubtitleProvider = "openAiResponses" | "ollama";
 
@@ -162,17 +170,31 @@ app.innerHTML = `
               </section>
 
               <section class="settings-group">
-                <p class="settings-group-title">字号</p>
-                <div class="settings-options">
-                  <button class="settings-option" type="button" data-setting="fontScale" data-value="normal">
-                    标准
-                  </button>
-                  <button class="settings-option" type="button" data-setting="fontScale" data-value="large">
-                    偏大
-                  </button>
-                  <button class="settings-option" type="button" data-setting="fontScale" data-value="xlarge">
-                    更大
-                  </button>
+                <div class="settings-slider-header">
+                  <p class="settings-group-title">字号</p>
+                  <output id="fontScaleValue" class="settings-slider-value" for="fontScaleSlider">
+                    100%
+                  </output>
+                </div>
+                <div class="settings-slider">
+                  <input
+                    id="fontScaleSlider"
+                    class="settings-slider-input"
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="1"
+                    value="0"
+                    aria-label="调节内容字号"
+                  />
+                  <div class="settings-slider-labels" aria-hidden="true">
+                    <span>100%</span>
+                    <span>110%</span>
+                    <span>120%</span>
+                    <span>130%</span>
+                    <span>140%</span>
+                    <span>150%</span>
+                  </div>
                 </div>
               </section>
 
@@ -251,6 +273,8 @@ const realtimeToggleButton = requireElement<HTMLButtonElement>("#realtimeToggleB
 const settingsMenu = requireElement<HTMLDivElement>(".settings-menu");
 const settingsMenuButton = requireElement<HTMLButtonElement>("#settingsMenuButton");
 const settingsPopover = requireElement<HTMLDivElement>("#settingsPopover");
+const fontScaleSlider = requireElement<HTMLInputElement>("#fontScaleSlider");
+const fontScaleValue = requireElement<HTMLOutputElement>("#fontScaleValue");
 const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 const collapseButton = requireElement<HTMLButtonElement>("#collapseButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
@@ -359,6 +383,10 @@ function bindUi() {
     });
   });
 
+  fontScaleSlider.addEventListener("input", () => {
+    applyFontScaleSliderValue(fontScaleSlider.value);
+  });
+
   hideButton.addEventListener("click", () => {
     void hideWindow();
   });
@@ -458,15 +486,26 @@ function loadStyleMode(): StyleMode {
 function loadFontScale(): FontScale {
   try {
     const value = window.localStorage.getItem(FONT_SCALE_STORAGE_KEY);
-    return value === "large" || value === "xlarge" ? value : "normal";
+
+    if (value && isFontScale(value)) {
+      return value;
+    }
+
+    if (value === "normal" || value === "large" || value === "xlarge") {
+      const migratedValue = LEGACY_FONT_SCALE_MAP[value];
+      window.localStorage.setItem(FONT_SCALE_STORAGE_KEY, migratedValue);
+      return migratedValue;
+    }
   } catch {
-    return "normal";
+    return DEFAULT_FONT_SCALE;
   }
+
+  return DEFAULT_FONT_SCALE;
 }
 
 function applyDisplaySettings() {
   windowContent.dataset.styleMode = styleMode;
-  windowContent.dataset.fontScale = fontScale;
+  windowContent.style.setProperty("--content-font-scale", fontScale);
   windowContent.dataset.hovered =
     styleMode === "contrast" && windowHovered ? "true" : "false";
   syncCollapsedState();
@@ -484,11 +523,14 @@ function syncSettingsOptions() {
     const active =
       (setting === "explainMode" && value === explainMode) ||
       (setting === "styleMode" && value === styleMode) ||
-      (setting === "fontScale" && value === fontScale) ||
       (setting === "ocrBorderMode" &&
         value === (ocrRegionState?.showBorderWhenIdle ? "alwaysVisible" : "editOnly"));
     button.dataset.active = active ? "true" : "false";
   });
+
+  fontScaleSlider.value = fontScaleToSliderValue(fontScale);
+  fontScaleSlider.setAttribute("aria-valuetext", fontScaleLabel(fontScale));
+  fontScaleValue.textContent = fontScaleLabel(fontScale);
 }
 
 function setSettingsOpen(nextOpen: boolean) {
@@ -563,11 +605,6 @@ async function applySetting(setting?: string, value?: string) {
     persistSetting(STYLE_MODE_STORAGE_KEY, styleMode);
   }
 
-  if (setting === "fontScale" && (value === "normal" || value === "large" || value === "xlarge")) {
-    fontScale = value;
-    persistSetting(FONT_SCALE_STORAGE_KEY, fontScale);
-  }
-
   if (setting === "ocrBorderMode" && (value === "editOnly" || value === "alwaysVisible")) {
     const previousOcrRegionState = ocrRegionState;
     const showBorderWhenIdle = value === "alwaysVisible";
@@ -607,6 +644,44 @@ function persistSetting(key: string, value: string) {
   } catch {
     // Ignore storage failures and keep the current in-memory selection.
   }
+}
+
+function isFontScale(value: string): value is FontScale {
+  return FONT_SCALE_VALUES.includes(value as FontScale);
+}
+
+function fontScaleToSliderValue(value: FontScale) {
+  const sliderValue = FONT_SCALE_VALUES.indexOf(value);
+  return String(sliderValue >= 0 ? sliderValue : 0);
+}
+
+function fontScaleFromSliderValue(value: string): FontScale {
+  const sliderValue = Number.parseInt(value, 10);
+
+  if (Number.isNaN(sliderValue)) {
+    return DEFAULT_FONT_SCALE;
+  }
+
+  const clampedValue = Math.max(0, Math.min(FONT_SCALE_VALUES.length - 1, sliderValue));
+  return FONT_SCALE_VALUES[clampedValue];
+}
+
+function fontScaleLabel(value: FontScale) {
+  return `${Math.round(Number(value) * 100)}%`;
+}
+
+function applyFontScaleSliderValue(value: string) {
+  const nextFontScale = fontScaleFromSliderValue(value);
+
+  if (nextFontScale === fontScale) {
+    syncSettingsOptions();
+    return;
+  }
+
+  fontScale = nextFontScale;
+  persistSetting(FONT_SCALE_STORAGE_KEY, fontScale);
+  applyDisplaySettings();
+  scheduleWindowSizeSync();
 }
 
 function setWindowHovered(nextHovered: boolean) {
