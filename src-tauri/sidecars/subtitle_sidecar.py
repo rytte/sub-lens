@@ -209,6 +209,8 @@ def ensure_ocr():
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        # PaddleOCR 3.x on Windows CPU can fail inside oneDNN during predict().
+        enable_mkldnn=False,
     )
     return ocr_instance
 

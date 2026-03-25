@@ -39,9 +39,8 @@ button {
   background:
     linear-gradient(180deg, rgba(141, 190, 255, 0.12), rgba(141, 190, 255, 0.06)),
     rgba(7, 12, 18, 0.14);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-    0 16px 36px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   cursor: move;
 }
 
@@ -50,7 +49,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 16px;
+  padding: 10px 16px 18px;
 }
 
 .eyebrow {
@@ -68,13 +67,15 @@ button {
 }
 
 .done-button {
-  min-width: 72px;
-  min-height: 34px;
-  padding: 0 12px;
+  min-width: 64px;
+  min-height: 30px;
+  padding: 0 10px;
   border-radius: 999px;
+  font-size: 13px;
   color: #08111d;
   background: linear-gradient(180deg, #c7dcff 0%, #8eb8ff 100%);
   cursor: pointer;
+  transform: translateY(-4px);
 }
 
 .resize-handle {
