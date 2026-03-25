@@ -1,16 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-type ResizeDirection =
-  | "East"
-  | "North"
-  | "NorthEast"
-  | "NorthWest"
-  | "South"
-  | "SouthEast"
-  | "SouthWest"
-  | "West";
+type ResizeDirection = "East" | "West";
 
 type SubtitlePhrase = {
   source: string;
@@ -32,10 +25,17 @@ type SubtitleStatus = {
 
 const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
+const WINDOW_MIN_WIDTH = 360;
+const WINDOW_MIN_HEIGHT = 140;
+const WINDOW_MAX_HEIGHT = 800;
+const RESIZE_SETTLE_MS = 140;
 const appWindow = getCurrentWindow();
 
 let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
+let sizeSyncFrame = 0;
+let windowResizeObserver: ResizeObserver | null = null;
+let sizeSyncTimeout = 0;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -43,17 +43,12 @@ if (!app) {
   throw new Error("App root not found.");
 }
 
+const appRoot = app;
+
 app.innerHTML = `
-  <main class="panel-shell">
-    <section class="panel">
-      <button class="resize-handle north" data-direction="North" aria-label="向上拉伸"></button>
-      <button class="resize-handle south" data-direction="South" aria-label="向下拉伸"></button>
+  <main class="subtitle-window">
       <button class="resize-handle east" data-direction="East" aria-label="向右拉伸"></button>
       <button class="resize-handle west" data-direction="West" aria-label="向左拉伸"></button>
-      <button class="resize-handle north-east" data-direction="NorthEast" aria-label="向右上拉伸"></button>
-      <button class="resize-handle north-west" data-direction="NorthWest" aria-label="向左上拉伸"></button>
-      <button class="resize-handle south-east" data-direction="SouthEast" aria-label="向右下拉伸"></button>
-      <button class="resize-handle south-west" data-direction="SouthWest" aria-label="向左下拉伸"></button>
 
       <div class="status-row">
         <div class="status-meta" data-tauri-drag-region>
@@ -82,21 +77,24 @@ app.innerHTML = `
         </div>
       </div>
 
-      <section class="block">
-        <div class="block-title">原字幕</div>
-        <pre id="sourceText" class="text-block empty">等待 OCR 结果...</pre>
-      </section>
+      <div class="content-stack">
+        <section class="block block-summary">
+          <div class="summary-row">
+            <span class="summary-label">原文</span>
+            <p id="sourceText" class="summary-text summary-text-source empty">等待 OCR 结果...</p>
+          </div>
+          <div class="summary-divider" aria-hidden="true"></div>
+          <div class="summary-row">
+            <span class="summary-label">翻译</span>
+            <p id="translationText" class="summary-text empty">等待 LLM 输出...</p>
+          </div>
+        </section>
 
-      <section class="block">
-        <div class="block-title">整句翻译</div>
-        <p id="translationText" class="paragraph empty">等待 LLM 输出...</p>
-      </section>
-
-      <section class="block">
-        <div class="block-title">逐词解释</div>
-        <div id="phrasesList" class="list empty">暂无逐词解释。</div>
-      </section>
-    </section>
+        <section class="block block-phrases">
+          <div class="block-title">逐词解释</div>
+          <div id="phrasesList" class="phrase-list empty">暂无逐词解释。</div>
+        </section>
+      </div>
   </main>
 `;
 
@@ -111,10 +109,13 @@ function requireElement<T extends HTMLElement>(selector: string): T {
 
 const statusText = requireElement<HTMLParagraphElement>("#statusText");
 const statusMeta = requireElement<HTMLDivElement>(".status-meta");
+const windowContent = requireElement<HTMLElement>(".subtitle-window");
+const statusRow = requireElement<HTMLDivElement>(".status-row");
+const contentStack = requireElement<HTMLDivElement>(".content-stack");
 const editOcrButton = requireElement<HTMLButtonElement>("#editOcrButton");
 const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
-const sourceText = requireElement<HTMLElement>("#sourceText");
+const sourceText = requireElement<HTMLParagraphElement>("#sourceText");
 const translationText = requireElement<HTMLParagraphElement>("#translationText");
 const phrasesList = requireElement<HTMLDivElement>("#phrasesList");
 const resizeHandles = Array.from(
@@ -122,15 +123,37 @@ const resizeHandles = Array.from(
 );
 
 async function init() {
-  const [initialStatus, initialResult] = await Promise.all([
-    invoke<SubtitleStatus>("load_subtitle_status"),
-    invoke<SubtitleResult | null>("load_latest_subtitle_result"),
-  ]);
-  status = initialStatus;
-  result = initialResult;
   bindUi();
-  render();
   bindEvents();
+
+  try {
+    await appWindow.setSizeConstraints({
+      minWidth: WINDOW_MIN_WIDTH,
+      minHeight: WINDOW_MIN_HEIGHT,
+      maxHeight: WINDOW_MAX_HEIGHT,
+    });
+  } catch (error) {
+    console.error("set subtitle window constraints failed:", error);
+  }
+
+  try {
+    const [initialStatus, initialResult] = await Promise.all([
+      invoke<SubtitleStatus>("load_subtitle_status"),
+      invoke<SubtitleResult | null>("load_latest_subtitle_result"),
+    ]);
+    status = initialStatus;
+    result = initialResult;
+  } catch (error) {
+    status = {
+      analyzing: false,
+      stage: "error",
+      message: "字幕助手初始化失败。",
+      error: String(error),
+    };
+  }
+
+  bindWindowAutoSizing();
+  render();
 }
 
 function bindUi() {
@@ -178,6 +201,85 @@ function bindEvents() {
   });
 }
 
+function bindWindowAutoSizing() {
+  windowResizeObserver?.disconnect();
+  windowResizeObserver = new ResizeObserver(() => {
+    scheduleWindowSizeSync(RESIZE_SETTLE_MS);
+  });
+  windowResizeObserver.observe(windowContent);
+}
+
+function scheduleWindowSizeSync(delay = 0) {
+  if (sizeSyncTimeout) {
+    window.clearTimeout(sizeSyncTimeout);
+    sizeSyncTimeout = 0;
+  }
+
+  if (delay > 0) {
+    sizeSyncTimeout = window.setTimeout(() => {
+      sizeSyncTimeout = 0;
+      scheduleWindowSizeSync();
+    }, delay);
+    return;
+  }
+
+  if (sizeSyncFrame) {
+    return;
+  }
+
+  sizeSyncFrame = window.requestAnimationFrame(() => {
+    sizeSyncFrame = 0;
+    void syncWindowSize();
+  });
+}
+
+async function syncWindowSize() {
+  try {
+    const targetHeight = Math.max(
+      WINDOW_MIN_HEIGHT,
+      Math.min(WINDOW_MAX_HEIGHT, getNaturalWindowHeight()),
+    );
+    const scaleFactor = await appWindow.scaleFactor();
+    const currentSize = (await appWindow.innerSize()).toLogical(scaleFactor);
+
+    if (Math.abs(currentSize.height - targetHeight) < 1) {
+      return;
+    }
+
+    await appWindow.setSize(new LogicalSize(currentSize.width, targetHeight));
+  } catch (error) {
+    console.error("sync subtitle window size failed:", error);
+  }
+}
+
+function getNaturalWindowHeight() {
+  const appStyles = window.getComputedStyle(appRoot);
+  const appPaddingTop = parseFloat(appStyles.paddingTop) || 0;
+  const appPaddingBottom = parseFloat(appStyles.paddingBottom) || 0;
+  const appBorderTop = parseFloat(appStyles.borderTopWidth) || 0;
+  const appBorderBottom = parseFloat(appStyles.borderBottomWidth) || 0;
+  const styles = window.getComputedStyle(windowContent);
+  const paddingTop = parseFloat(styles.paddingTop) || 0;
+  const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+  const borderTop = parseFloat(styles.borderTopWidth) || 0;
+  const borderBottom = parseFloat(styles.borderBottomWidth) || 0;
+  const gap = parseFloat(styles.rowGap || styles.gap) || 0;
+
+  return Math.ceil(
+    appPaddingTop +
+      appPaddingBottom +
+      appBorderTop +
+      appBorderBottom +
+      paddingTop +
+      paddingBottom +
+      borderTop +
+      borderBottom +
+      statusRow.getBoundingClientRect().height +
+      gap +
+      contentStack.scrollHeight,
+  );
+}
+
 function render() {
   renderStatus();
 
@@ -185,14 +287,24 @@ function render() {
     sourceText.textContent = "等待 OCR 结果...";
     translationText.textContent = "等待 LLM 输出...";
     phrasesList.innerHTML = "暂无逐词解释。";
-    toggleEmptyState(true);
+    setEmptyState(sourceText, true);
+    setEmptyState(translationText, true);
+    setEmptyState(phrasesList, true);
+    scheduleWindowSizeSync();
     return;
   }
+
+  const hasSourceText = Boolean(result.sourceText);
+  const hasTranslation = Boolean(result.translation);
+  const hasPhrases = result.phrases.length > 0;
 
   sourceText.textContent = result.sourceText || "未识别到文字";
   translationText.textContent = result.translation || "未返回整句翻译。";
   phrasesList.innerHTML = renderPhrases(result.phrases);
-  toggleEmptyState(false);
+  setEmptyState(sourceText, !hasSourceText);
+  setEmptyState(translationText, !hasTranslation);
+  setEmptyState(phrasesList, !hasPhrases);
+  scheduleWindowSizeSync();
 }
 
 function renderStatus() {
@@ -211,6 +323,7 @@ function renderStatus() {
       ? "running"
       : "idle";
   syncActionButtons();
+  scheduleWindowSizeSync();
 }
 
 function renderPhrases(phrases: SubtitlePhrase[]) {
@@ -221,19 +334,17 @@ function renderPhrases(phrases: SubtitlePhrase[]) {
   return phrases
     .map(
       (item) => `
-        <article class="list-item">
+        <article class="phrase-item">
           <strong>${escapeHtml(item.source)}</strong>
-          <p>${escapeHtml(item.explanation)}</p>
+          <span>${escapeHtml(item.explanation)}</span>
         </article>
       `,
     )
     .join("");
 }
 
-function toggleEmptyState(empty: boolean) {
-  [sourceText, translationText, phrasesList].forEach((element) => {
-    element.classList.toggle("empty", empty);
-  });
+function setEmptyState(element: HTMLElement, empty: boolean) {
+  element.classList.toggle("empty", empty);
 }
 
 function syncActionButtons() {
@@ -274,4 +385,8 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
-void init();
+void init().catch((error) => {
+  console.error("init subtitle explain window failed:", error);
+  statusText.textContent = `初始化失败：${String(error)}`;
+  statusText.dataset.state = "error";
+});

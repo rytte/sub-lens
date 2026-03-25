@@ -949,8 +949,8 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
         WebviewUrl::App("subtitle-explain.html".into()),
     )
     .title("字幕解释")
-    .inner_size(450.0, 600.0)
-    .min_inner_size(360.0, 260.0)
+    .inner_size(450.0, 220.0)
+    .min_inner_size(360.0, 140.0)
     .resizable(true)
     .decorations(false)
     .transparent(true)
