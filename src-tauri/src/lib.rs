@@ -1019,7 +1019,7 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
         WebviewUrl::App("subtitle-explain.html".into()),
     )
     .title("字幕解释")
-    .inner_size(500.0, 270.0)
+    .inner_size(520.0, 300.0)
     .min_inner_size(360.0, 140.0)
     .resizable(true)
     .decorations(false)
@@ -1327,15 +1327,12 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
     let size = main_window.inner_size().map_err(|err| err.to_string())?;
 
     let region = update_ocr_region_state(app, false, true, move |shared| {
+        let should_initialize_geometry =
+            shared.ocr_region.x.is_none() || shared.ocr_region.y.is_none();
         shared.ocr_region.visible = true;
-        if shared.ocr_region.x.is_none() || shared.ocr_region.y.is_none() {
+        if should_initialize_geometry {
             shared.ocr_region.x = Some(f64::from(position.x) / scale_factor);
             shared.ocr_region.y = Some(f64::from(position.y) / scale_factor);
-        }
-
-        if shared.ocr_region.width <= DEFAULT_OCR_REGION_WIDTH
-            && shared.ocr_region.height <= DEFAULT_OCR_REGION_HEIGHT
-        {
             shared.ocr_region.width =
                 (f64::from(size.width) / scale_factor).max(MIN_OCR_REGION_WIDTH);
             shared.ocr_region.height =

@@ -109,6 +109,21 @@ app.innerHTML = `
           <span id="statusText" class="status-text" data-state="idle">等待手动解析。</span>
         </div>
         <div class="action-row">
+          <button id="editOcrButton" class="action-button" type="button">
+            编辑 OCR 区域
+          </button>
+          <button
+            id="realtimeToggleButton"
+            class="action-button action-button-toggle-live"
+            type="button"
+            aria-label="切换实时解析"
+            aria-pressed="false"
+          >
+            实时解析关
+          </button>
+          <button id="analyzeButton" class="action-button action-button-primary" type="button">
+            解析当前字幕
+          </button>
           <div class="settings-menu">
             <button
               id="settingsMenuButton"
@@ -174,21 +189,6 @@ app.innerHTML = `
               </section>
             </div>
           </div>
-          <button id="editOcrButton" class="action-button" type="button">
-            编辑 OCR 区域
-          </button>
-          <button
-            id="realtimeToggleButton"
-            class="action-button action-button-toggle-live"
-            type="button"
-            aria-label="切换实时解析"
-            aria-pressed="false"
-          >
-            实时解析关
-          </button>
-          <button id="analyzeButton" class="action-button action-button-primary" type="button">
-            解析当前字幕
-          </button>
           <button
             id="collapseButton"
             class="action-button action-button-icon action-button-toggle"
