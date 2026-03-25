@@ -208,6 +208,7 @@ struct SubtitleExplainSettingsPayload {
 #[serde(rename_all = "camelCase")]
 struct OcrRegionStatePayload {
     visible: bool,
+    show_border_when_idle: bool,
     width: f64,
     height: f64,
     x: Option<f64>,
@@ -361,6 +362,7 @@ impl Default for OcrRegionStatePayload {
     fn default() -> Self {
         Self {
             visible: false,
+            show_border_when_idle: false,
             width: DEFAULT_OCR_REGION_WIDTH,
             height: DEFAULT_OCR_REGION_HEIGHT,
             x: None,
@@ -673,6 +675,10 @@ fn sanitize_ocr_region_state(mut state: OcrRegionStatePayload) -> OcrRegionState
     state.width = state.width.max(MIN_OCR_REGION_WIDTH);
     state.height = state.height.max(MIN_OCR_REGION_HEIGHT);
     state
+}
+
+fn effective_ocr_region_visibility(region: &OcrRegionStatePayload) -> bool {
+    region.visible || region.show_border_when_idle
 }
 
 fn is_valid_hex_color(value: &str) -> bool {
@@ -1048,9 +1054,9 @@ fn apply_ocr_region_window_state(
     }
 
     window
-        .set_ignore_cursor_events(false)
+        .set_ignore_cursor_events(!region.visible && region.show_border_when_idle)
         .map_err(|err| err.to_string())?;
-    apply_window_visibility(&window, region.visible)
+    apply_window_visibility(&window, effective_ocr_region_visibility(region))
 }
 
 fn update_ocr_region_state<F>(
@@ -1591,8 +1597,8 @@ fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
     let region = current_ocr_region_state(app)?;
     let window = ensure_ocr_region_window(app)?;
 
-    let was_visible = region.visible;
-    if was_visible {
+    let was_effectively_visible = effective_ocr_region_visibility(&region);
+    if was_effectively_visible {
         window.hide().map_err(|err| err.to_string())?;
         thread::sleep(Duration::from_millis(OCR_CAPTURE_SETTLE_MS));
     }
@@ -1622,10 +1628,12 @@ fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
         Ok(path)
     })();
 
-    if was_visible {
+    if region.visible {
         let _ = update_ocr_region_state(app, false, false, |shared| {
             shared.ocr_region.visible = false;
         });
+    } else if was_effectively_visible {
+        let _ = apply_ocr_region_window_state(app, &region);
     }
 
     result

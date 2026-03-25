@@ -34,6 +34,15 @@ type SubtitleExplainSettings = {
   blankClearMs: number;
 };
 
+type OcrRegionState = {
+  visible: boolean;
+  showBorderWhenIdle: boolean;
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+};
+
 type SubtitlePhrase = {
   source: string;
   explanation: string;
@@ -52,6 +61,7 @@ type SubtitleStatus = {
   error: string | null;
 };
 
+const EVENT_OCR_REGION_STATE_CHANGED = "ocr-region://state";
 const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
 const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
@@ -68,6 +78,7 @@ let styleMode: StyleMode = loadStyleMode();
 let fontScale: FontScale = loadFontScale();
 let explainMode: ExplainMode = "word";
 let subtitleSettings: SubtitleExplainSettings | null = null;
+let ocrRegionState: OcrRegionState | null = null;
 let windowHovered = false;
 let settingsOpen = false;
 let collapsed = false;
@@ -146,6 +157,18 @@ app.innerHTML = `
                   </button>
                   <button class="settings-option" type="button" data-setting="fontScale" data-value="xlarge">
                     更大
+                  </button>
+                </div>
+              </section>
+
+              <section class="settings-group">
+                <p class="settings-group-title">OCR 边框</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="ocrBorderMode" data-value="editOnly">
+                    仅编辑时
+                  </button>
+                  <button class="settings-option" type="button" data-setting="ocrBorderMode" data-value="alwaysVisible">
+                    常显
                   </button>
                 </div>
               </section>
@@ -259,16 +282,24 @@ async function init() {
   }
 
   try {
-    const [initialStatus, initialResult, initialExplainMode, initialSettings] = await Promise.all([
+    const [
+      initialStatus,
+      initialResult,
+      initialExplainMode,
+      initialSettings,
+      initialOcrRegionState,
+    ] = await Promise.all([
       invoke<SubtitleStatus>("load_subtitle_status"),
       invoke<SubtitleResult | null>("load_latest_subtitle_result"),
       invoke<ExplainMode>("load_subtitle_explain_mode"),
       invoke<SubtitleExplainSettings>("load_subtitle_explain_settings"),
+      invoke<OcrRegionState>("load_ocr_region_state"),
     ]);
     status = initialStatus;
     result = initialResult;
     explainMode = initialExplainMode;
     subtitleSettings = initialSettings;
+    ocrRegionState = initialOcrRegionState;
   } catch (error) {
     status = {
       analyzing: false,
@@ -371,6 +402,11 @@ function bindEvents() {
     renderStatus();
   });
 
+  void listen<OcrRegionState>(EVENT_OCR_REGION_STATE_CHANGED, (event) => {
+    ocrRegionState = event.payload;
+    applyDisplaySettings();
+  });
+
   void listen<SubtitleResult | null>(EVENT_SUBTITLE_RESULT_CHANGED, (event) => {
     result = event.payload;
     render();
@@ -448,7 +484,9 @@ function syncSettingsOptions() {
     const active =
       (setting === "explainMode" && value === explainMode) ||
       (setting === "styleMode" && value === styleMode) ||
-      (setting === "fontScale" && value === fontScale);
+      (setting === "fontScale" && value === fontScale) ||
+      (setting === "ocrBorderMode" &&
+        value === (ocrRegionState?.showBorderWhenIdle ? "alwaysVisible" : "editOnly"));
     button.dataset.active = active ? "true" : "false";
   });
 }
@@ -528,6 +566,27 @@ async function applySetting(setting?: string, value?: string) {
   if (setting === "fontScale" && (value === "normal" || value === "large" || value === "xlarge")) {
     fontScale = value;
     persistSetting(FONT_SCALE_STORAGE_KEY, fontScale);
+  }
+
+  if (setting === "ocrBorderMode" && (value === "editOnly" || value === "alwaysVisible")) {
+    const previousOcrRegionState = ocrRegionState;
+    const showBorderWhenIdle = value === "alwaysVisible";
+
+    try {
+      const latestOcrRegionState = await invoke<OcrRegionState>("load_ocr_region_state");
+      ocrRegionState = await invoke<OcrRegionState>("apply_ocr_region_state", {
+        nextState: {
+          ...latestOcrRegionState,
+          showBorderWhenIdle,
+        },
+      });
+    } catch (error) {
+      ocrRegionState = previousOcrRegionState;
+      applyDisplaySettings();
+      statusText.textContent = `切换 OCR 边框显示失败：${String(error)}`;
+      statusText.dataset.state = "error";
+      return;
+    }
   }
 
   applyDisplaySettings();

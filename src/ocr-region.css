@@ -44,6 +44,21 @@ button {
   cursor: move;
 }
 
+.region[data-editing="false"] {
+  border-style: solid;
+  border-color: rgba(141, 190, 255, 0.94);
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 0 18px rgba(115, 171, 255, 0.16);
+  cursor: default;
+}
+
+.region[data-editing="false"] .region-toolbar,
+.region[data-editing="false"] .resize-handle {
+  display: none;
+}
+
 .region-toolbar {
   position: absolute;
   top: 10px;

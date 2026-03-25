@@ -14,6 +14,7 @@ type ResizeDirection =
 
 type OcrRegionState = {
   visible: boolean;
+  showBorderWhenIdle: boolean;
   width: number;
   height: number;
   x: number | null;
@@ -73,6 +74,7 @@ async function init() {
   state = await invoke<OcrRegionState>("load_ocr_region_state");
   bindUi();
   bindWindowEvents();
+  render();
 }
 
 function bindUi() {
@@ -114,6 +116,7 @@ function bindUi() {
 function bindWindowEvents() {
   void listen<OcrRegionState>(EVENT_OCR_REGION_STATE_CHANGED, (event) => {
     state = event.payload;
+    render();
   });
 
   void appWindow.onMoved(async ({ payload }) => {
@@ -129,6 +132,11 @@ function bindWindowEvents() {
     state.height = payload.height / scaleFactor;
     scheduleGeometrySync();
   });
+}
+
+function render() {
+  regionEl.dataset.editing = state.visible ? "true" : "false";
+  regionEl.dataset.showBorderWhenIdle = state.showBorderWhenIdle ? "true" : "false";
 }
 
 function scheduleGeometrySync() {
