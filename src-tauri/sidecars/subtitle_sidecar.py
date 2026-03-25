@@ -15,11 +15,10 @@ from typing import Any
 SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "sourceText": {"type": "string"},
         "translation": {"type": "string"},
-        "summary": {"type": "string"},
         "phrases": {
             "type": "array",
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "properties": {
@@ -30,25 +29,10 @@ SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
-        "grammarPoints": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "provider": {"type": "string"},
-        "model": {"type": "string"},
-        "latencyMs": {"type": "number"},
-        "error": {"type": ["string", "null"]},
     },
     "required": [
-        "sourceText",
         "translation",
-        "summary",
         "phrases",
-        "grammarPoints",
-        "provider",
-        "model",
-        "latencyMs",
-        "error",
     ],
     "additionalProperties": False,
 }
@@ -57,11 +41,10 @@ SYSTEM_PROMPT = """你是一个字幕学习助手。
 你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
 要求：
 1. translation：给出自然、简洁的整句中文翻译。
-2. summary：用 1~2 句解释这句字幕的语气、场景或隐含含义。
-3. phrases：挑 2~5 个关键短语或搭配，逐个用中文解释。
-4. grammarPoints：列 1~4 个值得注意的语法点或表达习惯。
-5. 所有内容使用简体中文。
-6. 不要输出任何 JSON 之外的文字。"""
+2. phrases：挑 0~6 个关键短语或搭配，逐个用中文解释。
+3. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。
+4. 所有内容使用简体中文。
+5. 不要输出任何 JSON 之外的文字。"""
 
 ocr_instance = None
 OCR_SCORE_THRESHOLD = float(os.environ.get("SUB_LENS_OCR_SCORE_THRESHOLD", "0.20"))
@@ -159,6 +142,43 @@ def extract_first_json_block(text: str) -> str:
     return value[start:]
 
 
+def escape_invalid_json_backslashes(value: str) -> str:
+    repaired: list[str] = []
+    in_string = False
+    index = 0
+    valid_escapes = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
+
+    while index < len(value):
+        char = value[index]
+
+        if not in_string:
+            repaired.append(char)
+            if char == '"':
+                in_string = True
+            index += 1
+            continue
+
+        if char == '"':
+            repaired.append(char)
+            in_string = False
+            index += 1
+            continue
+
+        if char == "\\":
+            next_char = value[index + 1] if index + 1 < len(value) else ""
+            if next_char in valid_escapes:
+                repaired.append(char)
+            else:
+                repaired.append("\\\\")
+            index += 1
+            continue
+
+        repaired.append(char)
+        index += 1
+
+    return "".join(repaired)
+
+
 def parse_json_text(text: str, label: str) -> dict[str, Any]:
     candidate = extract_first_json_block(text)
     if not candidate.strip():
@@ -168,6 +188,18 @@ def parse_json_text(text: str, label: str) -> dict[str, Any]:
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError as exc:
+        repaired_candidate = escape_invalid_json_backslashes(candidate)
+        if repaired_candidate != candidate:
+            try:
+                parsed = json.loads(repaired_candidate)
+            except json.JSONDecodeError:
+                parsed = None
+            else:
+                if not isinstance(parsed, dict):
+                    raw_path = write_debug_file(label, text)
+                    raise RuntimeError(f"{label} 返回的 JSON 不是对象。原始内容已保存到：{raw_path}")
+                return parsed
+
         raw_path = write_debug_file(label, text)
         raise RuntimeError(
             f"{label} 返回的内容不是合法 JSON：{exc}。原始内容已保存到：{raw_path}"
@@ -281,10 +313,7 @@ def extract_ocr_text(image_path: str) -> str:
 
 
 def build_user_prompt(source_text: str) -> str:
-    return (
-        "请解释下面这句字幕，并严格按约定 JSON Schema 输出。\n\n"
-        f"字幕：{source_text}"
-    )
+    return f"请解释下面这句字幕，并严格按约定 JSON 输出。\n\n字幕：{source_text}"
 
 
 def extract_openai_output_text(response: dict[str, Any]) -> str:
@@ -357,17 +386,14 @@ def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    prompt_with_schema = (
-        f"{build_user_prompt(source_text)}\n\n"
-        f"输出 JSON Schema：{json.dumps(SCHEMA, ensure_ascii=False)}"
-    )
     payload = {
         "model": settings["model"],
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt_with_schema},
+            {"role": "user", "content": build_user_prompt(source_text)},
         ],
         "stream": False,
+        "think": False,
         "format": SCHEMA,
     }
     response = post_json(
@@ -383,36 +409,34 @@ def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
 
 
 def normalize_result(
-    settings: dict[str, Any],
     source_text: str,
-    latency_ms: int,
     llm_output: dict[str, Any],
 ) -> dict[str, Any]:
     phrases = []
     for item in llm_output.get("phrases") or []:
         if not isinstance(item, dict):
             continue
-        source = str(item.get("source") or "").strip()
-        explanation = str(item.get("explanation") or "").strip()
+        source = str(
+            item.get("source")
+            or item.get("english")
+            or item.get("term")
+            or item.get("phrase")
+            or ""
+        ).strip()
+        explanation = str(
+            item.get("explanation")
+            or item.get("chinese")
+            or item.get("meaning")
+            or item.get("translation")
+            or ""
+        ).strip()
         if source and explanation:
             phrases.append({"source": source, "explanation": explanation})
-
-    grammar_points = [
-        str(item).strip()
-        for item in (llm_output.get("grammarPoints") or [])
-        if str(item).strip()
-    ]
 
     return {
         "sourceText": source_text,
         "translation": str(llm_output.get("translation") or "").strip(),
-        "summary": str(llm_output.get("summary") or "").strip(),
-        "phrases": phrases[:5],
-        "grammarPoints": grammar_points[:4],
-        "provider": settings["provider"],
-        "model": settings["model"],
-        "latencyMs": latency_ms,
-        "error": None,
+        "phrases": phrases[:6],
     }
 
 
@@ -424,7 +448,6 @@ def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
 
     source_text = extract_ocr_text(str(image_path))
 
-    started = time.perf_counter()
     provider = str(settings.get("provider") or "")
     if provider == "openAiResponses":
         llm_output = call_openai(settings, source_text)
@@ -433,8 +456,7 @@ def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         raise RuntimeError(f"不支持的 provider：{provider}")
 
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    return normalize_result(settings, source_text, latency_ms, llm_output)
+    return normalize_result(source_text, llm_output)
 
 
 def handle_line(line: str) -> dict[str, Any]:

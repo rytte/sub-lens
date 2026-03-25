@@ -21,7 +21,6 @@ type SubtitleResult = {
   sourceText: string;
   translation: string;
   phrases: SubtitlePhrase[];
-  error: string | null;
 };
 
 type SubtitleStatus = {

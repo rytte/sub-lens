@@ -198,13 +198,7 @@ struct SubtitlePhrasePayload {
 struct SubtitleAnalysisResultPayload {
     source_text: String,
     translation: String,
-    summary: String,
     phrases: Vec<SubtitlePhrasePayload>,
-    grammar_points: Vec<String>,
-    provider: SubtitleProvider,
-    model: String,
-    latency_ms: u64,
-    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1333,10 +1327,8 @@ fn run_subtitle_analysis_blocking(
     let response = with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request);
 
     match response {
-        Ok(mut result) => {
+        Ok(result) => {
             let _ = fs::remove_file(&image_path);
-            result.provider = settings.provider.clone();
-            result.model = settings.model.clone();
             let result = set_subtitle_result(app, result)?;
             set_subtitle_status(app, false, "done", "字幕解析完成。", None)?;
             Ok(result)
