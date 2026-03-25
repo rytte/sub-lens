@@ -200,6 +200,17 @@ button {
   border-color: rgba(148, 194, 255, 0.42);
 }
 
+.action-button-toggle-live[data-enabled="true"] {
+  background: rgba(92, 212, 154, 0.18);
+  border-color: rgba(118, 230, 177, 0.34);
+  color: #e8fff4;
+}
+
+.action-button-toggle-live[data-enabled="true"]:hover {
+  background: rgba(92, 212, 154, 0.24);
+  border-color: rgba(136, 236, 189, 0.42);
+}
+
 .action-button-icon {
   width: 30px;
   height: 30px;
@@ -373,6 +384,7 @@ button {
 .subtitle-window[data-collapsed="true"] .status-meta,
 .subtitle-window[data-collapsed="true"] .settings-menu,
 .subtitle-window[data-collapsed="true"] #editOcrButton,
+.subtitle-window[data-collapsed="true"] #realtimeToggleButton,
 .subtitle-window[data-collapsed="true"] #analyzeButton,
 .subtitle-window[data-collapsed="true"] .block-summary {
   display: none;
@@ -518,6 +530,11 @@ button {
 .subtitle-window[data-style-mode="contrast"] .action-button-primary:hover {
   background: rgba(0, 0, 0, 0.12);
   border-color: rgba(0, 0, 0, 0.26);
+}
+
+.subtitle-window[data-style-mode="contrast"] .action-button-toggle-live[data-enabled="true"] {
+  background: rgba(0, 0, 0, 0.12);
+  border-color: rgba(0, 0, 0, 0.24);
 }
 
 .subtitle-window[data-style-mode="contrast"] .status-text[data-state="running"] {

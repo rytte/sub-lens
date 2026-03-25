@@ -260,10 +260,12 @@ def ensure_ocr():
     return ocr_instance
 
 
-def extract_ocr_text(image_path: str) -> str:
+def extract_ocr_text(image_path: str, *, allow_empty: bool = False) -> str:
     ocr = ensure_ocr()
     result = ocr.predict(image_path)
     if not result:
+        if allow_empty:
+            return ""
         raise RuntimeError(f"OCR 未返回任何结果。请检查 OCR 区域是否框准字幕。调试截图：{image_path}")
 
     first = result[0]
@@ -314,11 +316,16 @@ def extract_ocr_text(image_path: str) -> str:
         return merged
 
     if candidates:
+        if allow_empty:
+            return ""
         preview = "；".join(candidates[:8])
         raise RuntimeError(
             f"OCR 未识别到可用字幕文本。当前候选均低于阈值 {OCR_SCORE_THRESHOLD:.2f}。"
             f"候选：{preview}。调试截图：{image_path}"
         )
+
+    if allow_empty:
+        return ""
 
     raise RuntimeError(
         f"OCR 未识别到可用字幕文本。未检测到任何文字框。请检查 OCR 区域是否框准字幕。调试截图：{image_path}"
@@ -462,13 +469,22 @@ def normalize_result(
     }
 
 
-def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
+def ocr_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
     image_path = Path(str(payload.get("imagePath") or ""))
-    settings = payload.get("settings") or {}
+    allow_empty = bool(payload.get("allowEmpty"))
     if not image_path.exists():
         raise RuntimeError(f"OCR 输入图片不存在：{image_path}")
 
-    source_text = extract_ocr_text(str(image_path))
+    return {
+        "sourceText": extract_ocr_text(str(image_path), allow_empty=allow_empty),
+    }
+
+
+def explain_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
+    source_text = str(payload.get("sourceText") or "").strip()
+    settings = payload.get("settings") or {}
+    if not source_text:
+        raise RuntimeError("字幕文本不能为空。")
 
     provider = str(settings.get("provider") or "")
     if provider == "openAiResponses":
@@ -481,11 +497,25 @@ def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
     return normalize_result(source_text, llm_output)
 
 
+def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
+    image_path = Path(str(payload.get("imagePath") or ""))
+    settings = payload.get("settings") or {}
+    if not image_path.exists():
+        raise RuntimeError(f"OCR 输入图片不存在：{image_path}")
+
+    source_text = extract_ocr_text(str(image_path), allow_empty=False)
+    return explain_subtitle({"sourceText": source_text, "settings": settings})
+
+
 def handle_line(line: str) -> dict[str, Any]:
     request = json.loads(line)
     command = request.get("command")
     payload = request.get("payload") or {}
 
+    if command == "ocr_subtitle":
+        return success_response(ocr_subtitle(payload))
+    if command == "explain_subtitle":
+        return success_response(explain_subtitle(payload))
     if command == "analyze_subtitle":
         return success_response(analyze_subtitle(payload))
     return error_response(f"未知命令：{command}")

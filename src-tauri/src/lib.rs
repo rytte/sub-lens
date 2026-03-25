@@ -169,7 +169,7 @@ struct OverlayStatePayload {
     y: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 struct ProviderConnectionSettingsPayload {
@@ -178,7 +178,7 @@ struct ProviderConnectionSettingsPayload {
     model: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleProviderProfilesPayload {
@@ -186,7 +186,7 @@ struct SubtitleProviderProfilesPayload {
     ollama: ProviderConnectionSettingsPayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleExplainSettingsPayload {
@@ -214,14 +214,14 @@ struct OcrRegionStatePayload {
     y: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SubtitlePhrasePayload {
     source: String,
     explanation: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleAnalysisResultPayload {
     source_text: String,
@@ -229,7 +229,7 @@ struct SubtitleAnalysisResultPayload {
     phrases: Vec<SubtitlePhrasePayload>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleStatusPayload {
     analyzing: bool,
@@ -247,9 +247,22 @@ struct SidecarRequest<'a, T> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AnalyzeSubtitleRequest<'a> {
+struct OcrSubtitleRequest<'a> {
     image_path: &'a str,
+    allow_empty: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExplainSubtitleRequest<'a> {
+    source_text: &'a str,
     settings: &'a SubtitleExplainSettingsPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrSubtitleResultPayload {
+    source_text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,8 +384,10 @@ impl Default for SubtitleStatusPayload {
 struct SharedState {
     overlay: OverlayStatePayload,
     ocr_region: OcrRegionStatePayload,
+    subtitle_settings: SubtitleExplainSettingsPayload,
     subtitle_status: SubtitleStatusPayload,
     latest_subtitle_result: Option<SubtitleAnalysisResultPayload>,
+    subtitle_job_running: bool,
     ctrl_pressed: bool,
 }
 
@@ -380,19 +395,36 @@ impl SharedState {
     fn new(
         overlay: OverlayStatePayload,
         ocr_region: OcrRegionStatePayload,
+        subtitle_settings: SubtitleExplainSettingsPayload,
         ctrl_pressed: bool,
     ) -> Self {
         Self {
             overlay,
             ocr_region,
+            subtitle_settings,
             subtitle_status: SubtitleStatusPayload::default(),
             latest_subtitle_result: None,
+            subtitle_job_running: false,
             ctrl_pressed,
         }
     }
 }
 
 struct AppState(Mutex<SharedState>);
+
+struct SubtitleJobGuard {
+    app: AppHandle,
+}
+
+impl Drop for SubtitleJobGuard {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        let lock_result = state.0.lock();
+        if let Ok(mut shared) = lock_result {
+            shared.subtitle_job_running = false;
+        }
+    }
+}
 
 struct PythonSidecarProcess {
     child: Child,
@@ -750,6 +782,12 @@ fn current_ocr_region_state(app: &AppHandle) -> Result<OcrRegionStatePayload, St
     Ok(shared.ocr_region.clone())
 }
 
+fn current_subtitle_settings(app: &AppHandle) -> Result<SubtitleExplainSettingsPayload, String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.subtitle_settings.clone())
+}
+
 fn current_subtitle_status(app: &AppHandle) -> Result<SubtitleStatusPayload, String> {
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
@@ -762,6 +800,17 @@ fn current_subtitle_result(
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
     Ok(shared.latest_subtitle_result.clone())
+}
+
+fn try_acquire_subtitle_job(app: &AppHandle) -> Result<Option<SubtitleJobGuard>, String> {
+    let state = app.state::<AppState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    if shared.subtitle_job_running {
+        return Ok(None);
+    }
+
+    shared.subtitle_job_running = true;
+    Ok(Some(SubtitleJobGuard { app: app.clone() }))
 }
 
 fn emit_pixel_frame(app: &AppHandle, data_url: String) -> Result<(), String> {
@@ -781,7 +830,7 @@ fn emit_subtitle_status(app: &AppHandle, status: &SubtitleStatusPayload) -> Resu
 
 fn emit_subtitle_result(
     app: &AppHandle,
-    result: &SubtitleAnalysisResultPayload,
+    result: &Option<SubtitleAnalysisResultPayload>,
 ) -> Result<(), String> {
     app.emit(EVENT_SUBTITLE_RESULT_CHANGED, result.clone())
         .map_err(|err| err.to_string())
@@ -1045,19 +1094,26 @@ fn set_subtitle_status(
     message: &str,
     error: Option<String>,
 ) -> Result<SubtitleStatusPayload, String> {
-    let status = {
+    let (status, changed) = {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        shared.subtitle_status = SubtitleStatusPayload {
+        let next_status = SubtitleStatusPayload {
             analyzing,
             stage: stage.into(),
             message: message.into(),
             error,
         };
-        shared.subtitle_status.clone()
+        if shared.subtitle_status == next_status {
+            (shared.subtitle_status.clone(), false)
+        } else {
+            shared.subtitle_status = next_status;
+            (shared.subtitle_status.clone(), true)
+        }
     };
 
-    emit_subtitle_status(app, &status)?;
+    if changed {
+        emit_subtitle_status(app, &status)?;
+    }
     Ok(status)
 }
 
@@ -1065,14 +1121,47 @@ fn set_subtitle_result(
     app: &AppHandle,
     result: SubtitleAnalysisResultPayload,
 ) -> Result<SubtitleAnalysisResultPayload, String> {
+    let changed = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        let changed = shared.latest_subtitle_result.as_ref() != Some(&result);
+        shared.latest_subtitle_result = Some(result.clone());
+        changed
+    };
+
+    if changed {
+        emit_subtitle_result(app, &Some(result.clone()))?;
+    }
+    Ok(result)
+}
+
+fn clear_subtitle_result(app: &AppHandle) -> Result<(), String> {
+    let changed = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        let changed = shared.latest_subtitle_result.is_some();
+        shared.latest_subtitle_result = None;
+        changed
+    };
+
+    if changed {
+        emit_subtitle_result(app, &None)?;
+    }
+    Ok(())
+}
+
+fn save_runtime_subtitle_settings(
+    app: &AppHandle,
+    settings: SubtitleExplainSettingsPayload,
+) -> Result<SubtitleExplainSettingsPayload, String> {
+    let settings = sanitize_subtitle_settings(settings);
     {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        shared.latest_subtitle_result = Some(result.clone());
+        shared.subtitle_settings = settings.clone();
     }
-
-    emit_subtitle_result(app, &result)?;
-    Ok(result)
+    save_subtitle_settings(app, &settings)?;
+    Ok(settings)
 }
 
 fn update_overlay_state<F>(
@@ -1547,14 +1636,238 @@ fn preprocess_ocr_image(image: image::RgbaImage) -> image::RgbaImage {
     grayscale.adjust_contrast(24.0).to_rgba8()
 }
 
+#[derive(Debug, Default)]
+struct RealtimeSubtitleTracker {
+    candidate_text: Option<String>,
+    candidate_source_text: Option<String>,
+    stable_count: u32,
+    last_emitted_text: Option<String>,
+    blank_since_ms: Option<u128>,
+}
+
+impl RealtimeSubtitleTracker {
+    fn reset_candidate(&mut self) {
+        self.candidate_text = None;
+        self.candidate_source_text = None;
+        self.stable_count = 0;
+    }
+
+    fn reset_all(&mut self) {
+        self.reset_candidate();
+        self.last_emitted_text = None;
+        self.blank_since_ms = None;
+    }
+}
+
+fn normalize_subtitle_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn subtitle_similarity(left: &str, right: &str) -> f64 {
+    if left == right {
+        return 1.0;
+    }
+
+    let left_chars: Vec<char> = left.chars().collect();
+    let right_chars: Vec<char> = right.chars().collect();
+    if left_chars.is_empty() || right_chars.is_empty() {
+        return 0.0;
+    }
+
+    let right_len = right_chars.len();
+    let max_len = left_chars.len().max(right_len);
+    let mut previous: Vec<usize> = (0..=right_len).collect();
+    let mut current = vec![0; right_len + 1];
+
+    for (left_index, left_char) in left_chars.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let substitution_cost = usize::from(left_char != right_char);
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + substitution_cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    let distance = previous[right_len];
+    1.0 - distance as f64 / max_len as f64
+}
+
+fn run_subtitle_ocr_on_image(
+    app: &AppHandle,
+    image_path: &PathBuf,
+    allow_empty: bool,
+) -> Result<String, String> {
+    let image_path_string = image_path.to_string_lossy().to_string();
+    let request = SidecarRequest {
+        command: "ocr_subtitle",
+        payload: OcrSubtitleRequest {
+            image_path: &image_path_string,
+            allow_empty,
+        },
+    };
+
+    let response = with_python_sidecar::<OcrSubtitleResultPayload, _>(app, &request)?;
+    Ok(response.source_text)
+}
+
+fn explain_subtitle_text(
+    app: &AppHandle,
+    settings: &SubtitleExplainSettingsPayload,
+    source_text: &str,
+) -> Result<SubtitleAnalysisResultPayload, String> {
+    let request = SidecarRequest {
+        command: "explain_subtitle",
+        payload: ExplainSubtitleRequest {
+            source_text,
+            settings,
+        },
+    };
+
+    with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request)
+}
+
+fn capture_subtitle_source_text(app: &AppHandle, allow_empty: bool) -> Result<String, String> {
+    let image_path = capture_ocr_region_image(app)?;
+    let result = run_subtitle_ocr_on_image(app, &image_path, allow_empty);
+    let _ = fs::remove_file(&image_path);
+    result
+}
+
+fn handle_realtime_blank(
+    app: &AppHandle,
+    settings: &SubtitleExplainSettingsPayload,
+    tracker: &mut RealtimeSubtitleTracker,
+) -> Result<(), String> {
+    tracker.reset_candidate();
+
+    let blank_since_ms = tracker.blank_since_ms.get_or_insert_with(timestamp_millis);
+    let blank_elapsed_ms = timestamp_millis().saturating_sub(*blank_since_ms);
+    if blank_elapsed_ms >= u128::from(settings.blank_clear_ms) {
+        tracker.last_emitted_text = None;
+        clear_subtitle_result(app)?;
+        set_subtitle_status(
+            app,
+            false,
+            "realtime_waiting",
+            "未检测到字幕，等待新字幕。",
+            None,
+        )?;
+    } else {
+        set_subtitle_status(
+            app,
+            false,
+            "realtime_hold",
+            "未检测到字幕，暂时保留上一条结果。",
+            None,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn run_realtime_subtitle_iteration(
+    app: &AppHandle,
+    settings: &SubtitleExplainSettingsPayload,
+    tracker: &mut RealtimeSubtitleTracker,
+) -> Result<(), String> {
+    let source_text = capture_subtitle_source_text(app, true)?;
+    if source_text.is_empty() {
+        return handle_realtime_blank(app, settings, tracker);
+    }
+
+    tracker.blank_since_ms = None;
+    let normalized_text = normalize_subtitle_text(&source_text);
+    if normalized_text.is_empty() {
+        return handle_realtime_blank(app, settings, tracker);
+    }
+
+    let is_same_candidate = tracker
+        .candidate_text
+        .as_deref()
+        .map(|candidate| {
+            subtitle_similarity(candidate, &normalized_text) >= settings.similarity_threshold
+        })
+        .unwrap_or(false);
+
+    if is_same_candidate {
+        tracker.stable_count = tracker.stable_count.saturating_add(1);
+        tracker.candidate_source_text = Some(source_text);
+    } else {
+        tracker.candidate_text = Some(normalized_text.clone());
+        tracker.candidate_source_text = Some(source_text);
+        tracker.stable_count = 1;
+    }
+
+    let stable_target = settings.stable_frames.max(1);
+    if tracker.stable_count < stable_target {
+        let message = format!(
+            "实时识别中，等待字幕稳定（{}/{}）",
+            tracker.stable_count, stable_target
+        );
+        set_subtitle_status(app, false, "realtime_pending", &message, None)?;
+        return Ok(());
+    }
+
+    if tracker.last_emitted_text.as_deref() == Some(normalized_text.as_str()) {
+        set_subtitle_status(
+            app,
+            false,
+            "realtime_listening",
+            "实时监听中，等待新字幕。",
+            None,
+        )?;
+        return Ok(());
+    }
+
+    if let Some(existing_result) = current_subtitle_result(app)? {
+        let existing_text = normalize_subtitle_text(&existing_result.source_text);
+        if !existing_text.is_empty()
+            && subtitle_similarity(&existing_text, &normalized_text)
+                >= settings.similarity_threshold
+        {
+            tracker.last_emitted_text = Some(normalized_text);
+            set_subtitle_status(
+                app,
+                false,
+                "realtime_listening",
+                "实时监听中，等待新字幕。",
+                None,
+            )?;
+            return Ok(());
+        }
+    }
+
+    let Some(stable_source_text) = tracker.candidate_source_text.as_deref() else {
+        set_subtitle_status(
+            app,
+            false,
+            "realtime_listening",
+            "实时监听中，等待新字幕。",
+            None,
+        )?;
+        return Ok(());
+    };
+
+    open_subtitle_explain_window(app)?;
+    set_subtitle_status(app, true, "llm", "检测到稳定字幕，正在解析...", None)?;
+    let result = explain_subtitle_text(app, settings, stable_source_text)?;
+    let result = set_subtitle_result(app, result)?;
+    tracker.last_emitted_text = Some(normalize_subtitle_text(&result.source_text));
+    set_subtitle_status(app, false, "done", "实时字幕解析完成。", None)?;
+    Ok(())
+}
+
 fn run_subtitle_analysis_blocking(
     app: &AppHandle,
 ) -> Result<SubtitleAnalysisResultPayload, String> {
-    let settings = load_saved_subtitle_settings(app);
-    let status = current_subtitle_status(app)?;
-    if status.analyzing {
-        return Err("已有一条字幕正在解析中，请稍后再试。".into());
-    }
+    let _job_guard = try_acquire_subtitle_job(app)?
+        .ok_or_else(|| "已有一条字幕正在解析中，请稍后再试。".to_string())?;
+    let settings = current_subtitle_settings(app)?;
 
     open_subtitle_explain_window(app)?;
     if current_ocr_region_state(app)?.visible {
@@ -1566,39 +1879,21 @@ fn run_subtitle_analysis_blocking(
             None,
         )?;
     } else {
-        set_subtitle_status(app, true, "capture", "正在抓取 OCR 区域...", None)?;
+        set_subtitle_status(app, true, "capture", "正在抓取 OCR 区域并识别文本...", None)?;
     }
 
-    let image_path = match capture_ocr_region_image(app) {
-        Ok(path) => path,
+    let source_text = match capture_subtitle_source_text(app, false) {
+        Ok(source_text) => source_text,
         Err(err) => {
-            let _ = set_subtitle_status(
-                app,
-                false,
-                "error",
-                "抓取 OCR 区域失败。",
-                Some(err.clone()),
-            );
+            let _ = set_subtitle_status(app, false, "error", "获取字幕失败。", Some(err.clone()));
             return Err(err);
         }
     };
 
-    let image_path_string = image_path.to_string_lossy().to_string();
-    let request = SidecarRequest {
-        command: "analyze_subtitle",
-        payload: AnalyzeSubtitleRequest {
-            image_path: &image_path_string,
-            settings: &settings,
-        },
-    };
+    set_subtitle_status(app, true, "llm", "正在解析字幕...", None)?;
 
-    set_subtitle_status(app, true, "ocr", "正在执行 OCR 与 LLM 解析...", None)?;
-
-    let response = with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request);
-
-    match response {
+    match explain_subtitle_text(app, &settings, &source_text) {
         Ok(result) => {
-            let _ = fs::remove_file(&image_path);
             let result = set_subtitle_result(app, result)?;
             set_subtitle_status(app, false, "done", "字幕解析完成。", None)?;
             Ok(result)
@@ -1614,6 +1909,83 @@ fn start_manual_subtitle_analysis(app: AppHandle) {
     thread::spawn(move || {
         if let Err(err) = run_subtitle_analysis_blocking(&app) {
             eprintln!("subtitle analysis failed: {err}");
+        }
+    });
+}
+
+fn start_realtime_subtitle_loop(app: AppHandle) {
+    thread::spawn(move || {
+        let mut tracker = RealtimeSubtitleTracker::default();
+
+        loop {
+            let settings = match current_subtitle_settings(&app) {
+                Ok(settings) => settings,
+                Err(err) => {
+                    eprintln!("load subtitle settings failed: {err}");
+                    thread::sleep(Duration::from_millis(
+                        SubtitleExplainSettingsPayload::default().ocr_interval_ms as u64,
+                    ));
+                    continue;
+                }
+            };
+            let interval_ms = settings.ocr_interval_ms.max(250) as u64;
+
+            if !settings.realtime_enabled {
+                tracker.reset_all();
+                let _ = set_subtitle_status(&app, false, "idle", "等待手动解析。", None);
+                thread::sleep(Duration::from_millis(interval_ms));
+                continue;
+            }
+
+            match current_ocr_region_state(&app) {
+                Ok(region) if region.visible => {
+                    tracker.reset_candidate();
+                    tracker.blank_since_ms = None;
+                    let _ = set_subtitle_status(
+                        &app,
+                        false,
+                        "realtime_paused",
+                        "OCR 区域编辑中，实时解析已暂停。",
+                        None,
+                    );
+                    thread::sleep(Duration::from_millis(interval_ms));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("load ocr region failed: {err}");
+                    thread::sleep(Duration::from_millis(interval_ms));
+                    continue;
+                }
+            }
+
+            let _job_guard = match try_acquire_subtitle_job(&app) {
+                Ok(Some(guard)) => guard,
+                Ok(None) => {
+                    thread::sleep(Duration::from_millis(interval_ms));
+                    continue;
+                }
+                Err(err) => {
+                    eprintln!("acquire subtitle job failed: {err}");
+                    thread::sleep(Duration::from_millis(interval_ms));
+                    continue;
+                }
+            };
+
+            if let Err(err) = run_realtime_subtitle_iteration(&app, &settings, &mut tracker) {
+                tracker.reset_candidate();
+                tracker.blank_since_ms = None;
+                let _ = set_subtitle_status(
+                    &app,
+                    false,
+                    "error",
+                    "实时字幕解析失败。",
+                    Some(err.clone()),
+                );
+                eprintln!("realtime subtitle analysis failed: {err}");
+            }
+
+            thread::sleep(Duration::from_millis(interval_ms));
         }
     });
 }
@@ -2009,12 +2381,12 @@ fn load_overlay_state(app: AppHandle) -> Result<OverlayStatePayload, String> {
 fn load_subtitle_explain_settings(
     app: AppHandle,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
-    Ok(load_saved_subtitle_settings(&app))
+    current_subtitle_settings(&app)
 }
 
 #[tauri::command]
 fn load_subtitle_explain_mode(app: AppHandle) -> Result<SubtitleExplainMode, String> {
-    Ok(load_saved_subtitle_settings(&app).explain_mode)
+    Ok(current_subtitle_settings(&app)?.explain_mode)
 }
 
 #[tauri::command]
@@ -2022,8 +2394,7 @@ fn save_subtitle_explain_settings(
     app: AppHandle,
     next_settings: SubtitleExplainSettingsPayload,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
-    let next_settings = sanitize_subtitle_settings(next_settings);
-    save_subtitle_settings(&app, &next_settings)?;
+    let next_settings = save_runtime_subtitle_settings(&app, next_settings)?;
     refresh_tray_menu(&app, &current_overlay_state(&app)?)?;
     Ok(next_settings)
 }
@@ -2033,10 +2404,9 @@ fn save_subtitle_explain_mode(
     app: AppHandle,
     explain_mode: SubtitleExplainMode,
 ) -> Result<SubtitleExplainMode, String> {
-    let mut settings = load_saved_subtitle_settings(&app);
+    let mut settings = current_subtitle_settings(&app)?;
     settings.explain_mode = explain_mode;
-    let settings = sanitize_subtitle_settings(settings);
-    save_subtitle_settings(&app, &settings)?;
+    let settings = save_runtime_subtitle_settings(&app, settings)?;
     Ok(settings.explain_mode)
 }
 
@@ -2044,8 +2414,7 @@ fn save_subtitle_explain_mode(
 fn reset_subtitle_explain_settings(
     app: AppHandle,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
-    let settings = SubtitleExplainSettingsPayload::default();
-    save_subtitle_settings(&app, &settings)?;
+    let settings = save_runtime_subtitle_settings(&app, SubtitleExplainSettingsPayload::default())?;
     refresh_tray_menu(&app, &current_overlay_state(&app)?)?;
     Ok(settings)
 }
@@ -2363,10 +2732,12 @@ pub fn run() {
         .setup(|app| {
             let overlay = load_saved_state(app.handle());
             let ocr_region = load_saved_ocr_region(app.handle());
+            let subtitle_settings = load_saved_subtitle_settings(app.handle());
             let ctrl_pressed = current_ctrl_pressed();
             app.manage(AppState(Mutex::new(SharedState::new(
                 overlay.clone(),
                 ocr_region.clone(),
+                subtitle_settings,
                 ctrl_pressed,
             ))));
             app.manage(SidecarState(Mutex::new(None)));
@@ -2384,6 +2755,7 @@ pub fn run() {
             setup_tray(app.handle())?;
             start_pixelate_loop(app.handle().clone());
             start_ctrl_hold_loop(app.handle().clone());
+            start_realtime_subtitle_loop(app.handle().clone());
 
             #[cfg(desktop)]
             setup_shortcuts(app.handle())?;

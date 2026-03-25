@@ -44,7 +44,7 @@ app.innerHTML = `
       <div>
         <p class="eyebrow">字幕解析与解释</p>
         <h1 class="hero-title">更多设置</h1>
-        <p class="hero-subtitle">这里集中管理新增配置项，包括 Provider、base_url、模型、实时参数等。</p>
+        <p class="hero-subtitle">这里集中管理新增配置项，包括 Provider、Base URL、模型、实时参数等。</p>
       </div>
       <div class="hero-tags" aria-label="方案落地范围">
         <span class="tag">PP-OCRv5</span>
@@ -54,26 +54,9 @@ app.innerHTML = `
     </header>
 
     <section class="settings-card section-grid">
-      <div class="section-head">
-        <div>
-          <h2>功能开关</h2>
-          <p>当前默认以手动解析为主，实时解析作为增强项预留。</p>
-        </div>
-      </div>
-      <label class="toggle-row">
-        <div>
-          <span class="field-label">实时解析</span>
-          <span class="field-help">二阶段增强项，配置现在可保存，能力接入后直接生效。</span>
-        </div>
-        <input id="realtimeInput" type="checkbox" class="toggle-input" />
-      </label>
-    </section>
-
-    <section class="settings-card section-grid">
-      <div class="section-head">
+      <div class="section-head section-head-provider">
         <div>
           <h2>Provider</h2>
-          <p>统一抽象为固定 JSON 输出，避免前端依赖具体供应商。</p>
         </div>
       </div>
       <label class="field">
@@ -85,7 +68,7 @@ app.innerHTML = `
       </label>
       <p id="providerHint" class="inline-hint"></p>
       <label class="field">
-        <span class="field-label">base_url</span>
+        <span class="field-label">Base URL</span>
         <input id="baseUrlInput" class="text-input" type="url" spellcheck="false" />
       </label>
       <label class="field">
@@ -111,10 +94,9 @@ app.innerHTML = `
     </section>
 
     <section class="settings-card section-grid two-columns">
-      <div class="section-head full-span">
+      <div class="section-head section-head-realtime full-span">
         <div>
           <h2>实时参数</h2>
-          <p>取自方案建议值，后续做去抖与稳定化时直接复用。</p>
         </div>
       </div>
       <label class="field">
@@ -155,7 +137,6 @@ function requireElement<T extends HTMLElement>(selector: string): T {
   return element;
 }
 
-const realtimeInput = requireElement<HTMLInputElement>("#realtimeInput");
 const providerInput = requireElement<HTMLSelectElement>("#providerInput");
 const baseUrlInput = requireElement<HTMLInputElement>("#baseUrlInput");
 const apiKeyInput = requireElement<HTMLInputElement>("#apiKeyInput");
@@ -228,7 +209,6 @@ function bindUi() {
 }
 
 function render(settings: SubtitleExplainSettings) {
-  realtimeInput.checked = settings.realtimeEnabled;
   providerInput.value = settings.provider;
   applyProviderFields(settings, settings.provider);
   ocrIntervalInput.value = String(settings.ocrIntervalMs);
@@ -258,7 +238,7 @@ function updateProviderHint(provider: SubtitleProvider) {
 
 function defaultModelHint(provider: SubtitleProvider) {
   if (provider === "openAiResponses") {
-    return "可手动填写，也可用当前 base_url 和 API Key 拉取模型列表。";
+    return "可手动填写，也可用当前 Base URL 和 API Key 拉取模型列表。";
   }
 
   return "可手动填写，也可从当前 Ollama 服务拉取已安装模型。";
@@ -362,7 +342,7 @@ function collectSettings(): SubtitleExplainSettings {
   const activeProfile = getProviderProfile(currentSettings, currentSettings.provider);
 
   return {
-    realtimeEnabled: realtimeInput.checked,
+    realtimeEnabled: currentSettings.realtimeEnabled,
     provider: currentSettings.provider,
     explainMode: currentSettings.explainMode,
     baseUrl: activeProfile.baseUrl,

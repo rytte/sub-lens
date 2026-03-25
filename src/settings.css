@@ -112,6 +112,22 @@ button {
   gap: 18px;
 }
 
+.section-head {
+  --section-accent-rgb: 157 196 255;
+  --section-accent-color: #d8e8ff;
+  padding: 0 0 8px;
+}
+
+.section-head-provider {
+  --section-accent-rgb: 122 164 255;
+  --section-accent-color: #dbe7ff;
+}
+
+.section-head-realtime {
+  --section-accent-rgb: 91 204 177;
+  --section-accent-color: #dcfff5;
+}
+
 .two-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -122,7 +138,27 @@ button {
 
 .section-head h2 {
   margin: 0;
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 14px 0 12px;
+  border: 1px solid rgb(var(--section-accent-rgb) / 0.2);
+  border-radius: 999px;
+  background: rgb(var(--section-accent-rgb) / 0.1);
+  color: var(--section-accent-color);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.section-head h2::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 4px rgb(var(--section-accent-rgb) / 0.12);
 }
 
 .section-head p {

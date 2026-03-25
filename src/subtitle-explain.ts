@@ -7,6 +7,32 @@ type ResizeDirection = "East" | "West";
 type StyleMode = "default" | "contrast";
 type FontScale = "normal" | "large" | "xlarge";
 type ExplainMode = "phrase" | "word";
+type SubtitleProvider = "openAiResponses" | "ollama";
+
+type ProviderConnectionSettings = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
+
+type SubtitleProviderProfiles = {
+  openAiResponses: ProviderConnectionSettings;
+  ollama: ProviderConnectionSettings;
+};
+
+type SubtitleExplainSettings = {
+  realtimeEnabled: boolean;
+  provider: SubtitleProvider;
+  explainMode: ExplainMode;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  providerProfiles: SubtitleProviderProfiles;
+  ocrIntervalMs: number;
+  stableFrames: number;
+  similarityThreshold: number;
+  blankClearMs: number;
+};
 
 type SubtitlePhrase = {
   source: string;
@@ -41,12 +67,14 @@ let result: SubtitleResult | null = null;
 let styleMode: StyleMode = loadStyleMode();
 let fontScale: FontScale = loadFontScale();
 let explainMode: ExplainMode = "word";
+let subtitleSettings: SubtitleExplainSettings | null = null;
 let windowHovered = false;
 let settingsOpen = false;
 let collapsed = false;
 let sizeSyncFrame = 0;
 let windowResizeObserver: ResizeObserver | null = null;
 let sizeSyncTimeout = 0;
+let realtimeTogglePending = false;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -126,6 +154,15 @@ app.innerHTML = `
           <button id="editOcrButton" class="action-button" type="button">
             编辑 OCR 区域
           </button>
+          <button
+            id="realtimeToggleButton"
+            class="action-button action-button-toggle-live"
+            type="button"
+            aria-label="切换实时解析"
+            aria-pressed="false"
+          >
+            实时解析关
+          </button>
           <button id="analyzeButton" class="action-button action-button-primary" type="button">
             解析当前字幕
           </button>
@@ -187,6 +224,7 @@ const windowContent = requireElement<HTMLElement>(".subtitle-window");
 const statusRow = requireElement<HTMLDivElement>(".status-row");
 const contentStack = requireElement<HTMLDivElement>(".content-stack");
 const editOcrButton = requireElement<HTMLButtonElement>("#editOcrButton");
+const realtimeToggleButton = requireElement<HTMLButtonElement>("#realtimeToggleButton");
 const settingsMenu = requireElement<HTMLDivElement>(".settings-menu");
 const settingsMenuButton = requireElement<HTMLButtonElement>("#settingsMenuButton");
 const settingsPopover = requireElement<HTMLDivElement>("#settingsPopover");
@@ -221,14 +259,16 @@ async function init() {
   }
 
   try {
-    const [initialStatus, initialResult, initialExplainMode] = await Promise.all([
+    const [initialStatus, initialResult, initialExplainMode, initialSettings] = await Promise.all([
       invoke<SubtitleStatus>("load_subtitle_status"),
       invoke<SubtitleResult | null>("load_latest_subtitle_result"),
       invoke<ExplainMode>("load_subtitle_explain_mode"),
+      invoke<SubtitleExplainSettings>("load_subtitle_explain_settings"),
     ]);
     status = initialStatus;
     result = initialResult;
     explainMode = initialExplainMode;
+    subtitleSettings = initialSettings;
   } catch (error) {
     status = {
       analyzing: false,
@@ -267,6 +307,10 @@ function bindUi() {
 
   editOcrButton.addEventListener("click", () => {
     void invoke("show_ocr_region");
+  });
+
+  realtimeToggleButton.addEventListener("click", () => {
+    void toggleRealtimeParsing();
   });
 
   settingsMenuButton.addEventListener("click", (event) => {
@@ -327,7 +371,7 @@ function bindEvents() {
     renderStatus();
   });
 
-  void listen<SubtitleResult>(EVENT_SUBTITLE_RESULT_CHANGED, (event) => {
+  void listen<SubtitleResult | null>(EVENT_SUBTITLE_RESULT_CHANGED, (event) => {
     result = event.payload;
     render();
   });
@@ -649,6 +693,20 @@ function syncActionButtons() {
   const analyzing = Boolean(status?.analyzing);
   analyzeButton.disabled = analyzing;
   analyzeButton.textContent = analyzing ? "解析中..." : "解析当前字幕";
+  syncRealtimeToggleButton();
+}
+
+function syncRealtimeToggleButton() {
+  const realtimeEnabled = Boolean(subtitleSettings?.realtimeEnabled);
+  realtimeToggleButton.dataset.enabled = realtimeEnabled ? "true" : "false";
+  realtimeToggleButton.disabled = realtimeTogglePending;
+  realtimeToggleButton.textContent = realtimeTogglePending
+    ? "切换中..."
+    : realtimeEnabled
+      ? "实时解析开"
+      : "实时解析关";
+  realtimeToggleButton.setAttribute("aria-pressed", realtimeEnabled ? "true" : "false");
+  realtimeToggleButton.title = realtimeEnabled ? "点击关闭实时解析" : "点击开启实时解析";
 }
 
 async function analyzeCurrentSubtitle() {
@@ -661,6 +719,48 @@ async function analyzeCurrentSubtitle() {
     statusText.textContent = `解析失败：${String(error)}`;
     statusText.dataset.state = "error";
   } finally {
+    syncActionButtons();
+  }
+}
+
+async function toggleRealtimeParsing() {
+  if (realtimeTogglePending) {
+    return;
+  }
+
+  const previousSettings = subtitleSettings;
+  const previousExplainMode = explainMode;
+
+  try {
+    realtimeTogglePending = true;
+    syncRealtimeToggleButton();
+
+    const latestSettings = await invoke<SubtitleExplainSettings>(
+      "load_subtitle_explain_settings",
+    );
+    const nextSettings = {
+      ...latestSettings,
+      realtimeEnabled: !latestSettings.realtimeEnabled,
+    };
+    const savedSettings = await invoke<SubtitleExplainSettings>(
+      "save_subtitle_explain_settings",
+      {
+        nextSettings,
+      },
+    );
+
+    subtitleSettings = savedSettings;
+    explainMode = savedSettings.explainMode;
+    applyDisplaySettings();
+    render();
+  } catch (error) {
+    subtitleSettings = previousSettings;
+    explainMode = previousExplainMode;
+    syncRealtimeToggleButton();
+    statusText.textContent = `切换实时解析失败：${String(error)}`;
+    statusText.dataset.state = "error";
+  } finally {
+    realtimeTogglePending = false;
     syncActionButtons();
   }
 }
