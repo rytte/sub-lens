@@ -74,9 +74,10 @@ const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
 const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
 const FONT_SCALE_STORAGE_KEY = "subtitle-explain-font-scale";
+const AUTO_HEIGHT_STORAGE_KEY = "subtitle-explain-auto-height-enabled";
 const WINDOW_MIN_WIDTH = 360;
 const WINDOW_MIN_HEIGHT = 140;
-const WINDOW_MAX_HEIGHT = 800;
+const AUTO_HEIGHT_MAX_WINDOW_HEIGHT = 880;
 const RESIZE_SETTLE_MS = 140;
 const appWindow = getCurrentWindow();
 
@@ -84,6 +85,7 @@ let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
 let styleMode: StyleMode = loadStyleMode();
 let fontScale: FontScale = loadFontScale();
+let autoHeightEnabled = loadAutoHeightEnabled();
 let explainMode: ExplainMode = "word";
 let subtitleSettings: SubtitleExplainSettings | null = null;
 let ocrRegionState: OcrRegionState | null = null;
@@ -168,6 +170,18 @@ app.innerHTML = `
                   </button>
                   <button class="settings-option" type="button" data-setting="styleMode" data-value="contrastLight">
                     白字
+                  </button>
+                </div>
+              </section>
+
+              <section class="settings-group">
+                <p class="settings-group-title">窗口高度</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="autoHeight" data-value="disabled">
+                    固定
+                  </button>
+                  <button class="settings-option" type="button" data-setting="autoHeight" data-value="enabled">
+                    自适应
                   </button>
                 </div>
               </section>
@@ -297,16 +311,7 @@ async function init() {
   bindUi();
   bindEvents();
   applyDisplaySettings();
-
-  try {
-    await appWindow.setSizeConstraints({
-      minWidth: WINDOW_MIN_WIDTH,
-      minHeight: WINDOW_MIN_HEIGHT,
-      maxHeight: WINDOW_MAX_HEIGHT,
-    });
-  } catch (error) {
-    console.error("set subtitle window constraints failed:", error);
-  }
+  await syncWindowSizeConstraints();
 
   try {
     const [
@@ -453,6 +458,11 @@ function bindWindowAutoSizing() {
 }
 
 function scheduleWindowSizeSync(delay = 0) {
+  if (!autoHeightEnabled) {
+    cancelWindowSizeSync();
+    return;
+  }
+
   if (sizeSyncTimeout) {
     window.clearTimeout(sizeSyncTimeout);
     sizeSyncTimeout = 0;
@@ -474,6 +484,30 @@ function scheduleWindowSizeSync(delay = 0) {
     sizeSyncFrame = 0;
     void syncWindowSize();
   });
+}
+
+function cancelWindowSizeSync() {
+  if (sizeSyncTimeout) {
+    window.clearTimeout(sizeSyncTimeout);
+    sizeSyncTimeout = 0;
+  }
+
+  if (sizeSyncFrame) {
+    window.cancelAnimationFrame(sizeSyncFrame);
+    sizeSyncFrame = 0;
+  }
+}
+
+async function syncWindowSizeConstraints() {
+  try {
+    await appWindow.setSizeConstraints({
+      minWidth: WINDOW_MIN_WIDTH,
+      minHeight: WINDOW_MIN_HEIGHT,
+      maxHeight: autoHeightEnabled ? AUTO_HEIGHT_MAX_WINDOW_HEIGHT : undefined,
+    });
+  } catch (error) {
+    console.error("set subtitle window constraints failed:", error);
+  }
 }
 
 function loadStyleMode(): StyleMode {
@@ -510,6 +544,14 @@ function loadFontScale(): FontScale {
   return DEFAULT_FONT_SCALE;
 }
 
+function loadAutoHeightEnabled() {
+  try {
+    return window.localStorage.getItem(AUTO_HEIGHT_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function applyDisplaySettings() {
   windowContent.dataset.styleMode = styleMode;
   windowContent.style.setProperty("--content-font-scale", fontScale);
@@ -530,6 +572,8 @@ function syncSettingsOptions() {
     const active =
       (setting === "explainMode" && value === explainMode) ||
       (setting === "styleMode" && value === styleMode) ||
+      (setting === "autoHeight" &&
+        value === (autoHeightEnabled ? "enabled" : "disabled")) ||
       (setting === "ocrBorderMode" &&
         value === (ocrRegionState?.showBorderWhenIdle ? "alwaysVisible" : "editOnly"));
     button.dataset.active = active ? "true" : "false";
@@ -613,6 +657,19 @@ async function applySetting(setting?: string, value?: string) {
   ) {
     styleMode = value;
     persistSetting(STYLE_MODE_STORAGE_KEY, styleMode);
+  }
+
+  if (setting === "autoHeight" && (value === "enabled" || value === "disabled")) {
+    autoHeightEnabled = value === "enabled";
+    persistSetting(AUTO_HEIGHT_STORAGE_KEY, String(autoHeightEnabled));
+    applyDisplaySettings();
+    await syncWindowSizeConstraints();
+    if (autoHeightEnabled) {
+      scheduleWindowSizeSync();
+    } else {
+      cancelWindowSizeSync();
+    }
+    return;
   }
 
   if (setting === "ocrBorderMode" && (value === "editOnly" || value === "alwaysVisible")) {
@@ -709,7 +766,7 @@ async function syncWindowSize() {
   try {
     const targetHeight = Math.max(
       WINDOW_MIN_HEIGHT,
-      Math.min(WINDOW_MAX_HEIGHT, getNaturalWindowHeight()),
+      Math.min(AUTO_HEIGHT_MAX_WINDOW_HEIGHT, getNaturalWindowHeight()),
     );
     const scaleFactor = await appWindow.scaleFactor();
     const currentSize = (await appWindow.innerSize()).toLogical(scaleFactor);
