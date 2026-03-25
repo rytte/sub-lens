@@ -137,6 +137,51 @@ button {
   gap: 8px;
 }
 
+.input-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.model-list[hidden] {
+  display: none;
+}
+
+.model-chip {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid rgba(157, 196, 255, 0.22);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(157, 196, 255, 0.1);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.model-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(157, 196, 255, 0.4);
+  background: rgba(157, 196, 255, 0.16);
+}
+
+.model-chip:active {
+  transform: translateY(1px);
+}
+
 .toggle-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -161,6 +206,14 @@ button {
 .inline-hint {
   color: rgba(255, 255, 255, 0.64);
   font-size: 12px;
+}
+
+.field-help[data-tone="success"] {
+  color: #9be3b0;
+}
+
+.field-help[data-tone="error"] {
+  color: #ffb4b4;
 }
 
 .inline-hint {
@@ -188,6 +241,12 @@ button {
   border-color: rgba(157, 196, 255, 0.64);
   background: rgba(255, 255, 255, 0.08);
   box-shadow: 0 0 0 4px rgba(157, 196, 255, 0.14);
+}
+
+.select-input option,
+.select-input optgroup {
+  color: #0f1722;
+  background: #f3f7ff;
 }
 
 .footer-bar {
@@ -232,6 +291,11 @@ button {
     opacity 120ms ease;
 }
 
+.inline-button {
+  min-width: 78px;
+  white-space: nowrap;
+}
+
 .primary-button {
   color: #09111d;
   background: linear-gradient(180deg, #b7d3ff 0%, #8eb8ff 100%);
@@ -253,6 +317,11 @@ button {
 }
 
 .primary-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.ghost-button:disabled {
   cursor: wait;
   opacity: 0.7;
 }

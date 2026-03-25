@@ -1,7 +1,7 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::{
+    imageops::{resize, FilterType},
     DynamicImage, ImageFormat,
-    imageops::{FilterType, resize},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -17,23 +17,20 @@ use std::{
 use tauri::{
     menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
 use tauri_plugin_store::StoreExt;
-use xcap::Monitor;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
     VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::Graphics::Dwm::{
-    DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute,
-};
+use xcap::Monitor;
 
 const EVENT_STATE_CHANGED: &str = "overlay://state";
 const EVENT_PIXEL_FRAME: &str = "overlay://pixel-frame";
@@ -162,12 +159,30 @@ struct OverlayStatePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
+struct ProviderConnectionSettingsPayload {
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+struct SubtitleProviderProfilesPayload {
+    open_ai_responses: ProviderConnectionSettingsPayload,
+    ollama: ProviderConnectionSettingsPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
 struct SubtitleExplainSettingsPayload {
     realtime_enabled: bool,
     provider: SubtitleProvider,
     base_url: String,
     api_key: String,
     model: String,
+    provider_profiles: SubtitleProviderProfilesPayload,
     ocr_interval_ms: u32,
     stable_frames: u32,
     similarity_threshold: f64,
@@ -231,6 +246,27 @@ struct SidecarResponse<T> {
     error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModelItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelItem {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModelItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModelItem {
+    name: String,
+    model: Option<String>,
+}
+
 impl Default for OverlayStatePayload {
     fn default() -> Self {
         Self {
@@ -255,16 +291,40 @@ impl Default for OverlayStatePayload {
 impl Default for SubtitleExplainSettingsPayload {
     fn default() -> Self {
         let provider = SubtitleProvider::default();
+        let provider_profiles = SubtitleProviderProfilesPayload::default();
+        let active_profile = provider_profile(&provider_profiles, &provider).clone();
         Self {
             realtime_enabled: false,
-            base_url: default_base_url(&provider).into(),
-            api_key: String::new(),
-            model: default_model(&provider).into(),
+            base_url: active_profile.base_url,
+            api_key: active_profile.api_key,
+            model: active_profile.model,
             provider,
+            provider_profiles,
             ocr_interval_ms: 300,
             stable_frames: 2,
             similarity_threshold: 0.88,
             blank_clear_ms: 600,
+        }
+    }
+}
+
+impl Default for ProviderConnectionSettingsPayload {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+        }
+    }
+}
+
+impl Default for SubtitleProviderProfilesPayload {
+    fn default() -> Self {
+        Self {
+            open_ai_responses: default_provider_connection_settings(
+                &SubtitleProvider::OpenAiResponses,
+            ),
+            ollama: default_provider_connection_settings(&SubtitleProvider::Ollama),
         }
     }
 }
@@ -302,7 +362,11 @@ struct SharedState {
 }
 
 impl SharedState {
-    fn new(overlay: OverlayStatePayload, ocr_region: OcrRegionStatePayload, ctrl_pressed: bool) -> Self {
+    fn new(
+        overlay: OverlayStatePayload,
+        ocr_region: OcrRegionStatePayload,
+        ctrl_pressed: bool,
+    ) -> Self {
         Self {
             overlay,
             ocr_region,
@@ -344,6 +408,182 @@ fn default_model(provider: &SubtitleProvider) -> &'static str {
     }
 }
 
+fn default_provider_connection_settings(
+    provider: &SubtitleProvider,
+) -> ProviderConnectionSettingsPayload {
+    ProviderConnectionSettingsPayload {
+        base_url: default_base_url(provider).into(),
+        api_key: String::new(),
+        model: default_model(provider).into(),
+    }
+}
+
+fn provider_profile<'a>(
+    profiles: &'a SubtitleProviderProfilesPayload,
+    provider: &SubtitleProvider,
+) -> &'a ProviderConnectionSettingsPayload {
+    match provider {
+        SubtitleProvider::OpenAiResponses => &profiles.open_ai_responses,
+        SubtitleProvider::Ollama => &profiles.ollama,
+    }
+}
+
+fn provider_profile_mut<'a>(
+    profiles: &'a mut SubtitleProviderProfilesPayload,
+    provider: &SubtitleProvider,
+) -> &'a mut ProviderConnectionSettingsPayload {
+    match provider {
+        SubtitleProvider::OpenAiResponses => &mut profiles.open_ai_responses,
+        SubtitleProvider::Ollama => &mut profiles.ollama,
+    }
+}
+
+fn sanitize_provider_connection_settings(
+    mut settings: ProviderConnectionSettingsPayload,
+    provider: &SubtitleProvider,
+) -> ProviderConnectionSettingsPayload {
+    settings.base_url = normalize_base_url(&settings.base_url, provider);
+    settings.api_key = settings.api_key.trim().to_string();
+    settings.model = if settings.model.trim().is_empty() {
+        default_model(provider).into()
+    } else {
+        settings.model.trim().to_string()
+    };
+    settings
+}
+
+fn sanitize_provider_profiles(
+    mut profiles: SubtitleProviderProfilesPayload,
+) -> SubtitleProviderProfilesPayload {
+    profiles.open_ai_responses = sanitize_provider_connection_settings(
+        profiles.open_ai_responses,
+        &SubtitleProvider::OpenAiResponses,
+    );
+    profiles.ollama =
+        sanitize_provider_connection_settings(profiles.ollama, &SubtitleProvider::Ollama);
+    profiles
+}
+
+fn normalize_base_url(base_url: &str, provider: &SubtitleProvider) -> String {
+    let trimmed = base_url.trim();
+    let effective = if trimmed.is_empty() {
+        default_base_url(provider)
+    } else {
+        trimmed
+    };
+    effective.trim_end_matches('/').to_string()
+}
+
+fn join_base_url(base_url: &str, suffix: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), suffix)
+}
+
+fn dedup_and_sort_models(models: Vec<String>) -> Vec<String> {
+    let mut normalized = models
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    normalized.sort_by_cached_key(|value| value.to_ascii_lowercase());
+    normalized.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    normalized
+}
+
+fn summarize_http_error(body: &str) -> String {
+    let condensed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if condensed.is_empty() {
+        return "接口未返回错误详情。".into();
+    }
+
+    let mut summary = condensed.chars().take(180).collect::<String>();
+    if condensed.chars().count() > 180 {
+        summary.push_str("...");
+    }
+    summary
+}
+
+fn build_model_fetch_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|err| format!("创建模型拉取客户端失败：{err}"))
+}
+
+async fn fetch_openai_models(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    if api_key.trim().is_empty() {
+        return Err("OpenAI Responses 拉取模型列表需要填写 API Key。".into());
+    }
+
+    let client = build_model_fetch_client()?;
+    let response = client
+        .get(join_base_url(base_url, "/models"))
+        .bearer_auth(api_key.trim())
+        .send()
+        .await
+        .map_err(|err| format!("请求模型列表失败：{err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "拉取模型列表失败（HTTP {}）：{}",
+            status.as_u16(),
+            summarize_http_error(&body)
+        ));
+    }
+
+    let payload = response
+        .json::<OpenAiModelsResponse>()
+        .await
+        .map_err(|err| format!("解析 OpenAI 模型列表失败：{err}"))?;
+    Ok(dedup_and_sort_models(
+        payload.data.into_iter().map(|item| item.id).collect(),
+    ))
+}
+
+async fn fetch_ollama_models(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let client = build_model_fetch_client()?;
+    let mut request = client.get(join_base_url(base_url, "/api/tags"));
+    if !api_key.trim().is_empty() {
+        request = request.bearer_auth(api_key.trim());
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("请求模型列表失败：{err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "拉取模型列表失败（HTTP {}）：{}",
+            status.as_u16(),
+            summarize_http_error(&body)
+        ));
+    }
+
+    let payload = response
+        .json::<OllamaTagsResponse>()
+        .await
+        .map_err(|err| format!("解析 Ollama 模型列表失败：{err}"))?;
+    Ok(dedup_and_sort_models(
+        payload
+            .models
+            .into_iter()
+            .map(|item| {
+                let model = item.model.unwrap_or_default();
+                if item.name.trim().is_empty() {
+                    model
+                } else {
+                    item.name
+                }
+            })
+            .collect(),
+    ))
+}
+
 fn sanitize_state(mut state: OverlayStatePayload) -> OverlayStatePayload {
     state.opacity = state.opacity.clamp(0.2, 1.0);
     state.width = state.width.max(MIN_WIDTH);
@@ -361,17 +601,20 @@ fn sanitize_state(mut state: OverlayStatePayload) -> OverlayStatePayload {
 fn sanitize_subtitle_settings(
     mut settings: SubtitleExplainSettingsPayload,
 ) -> SubtitleExplainSettingsPayload {
-    settings.base_url = if settings.base_url.trim().is_empty() {
-        default_base_url(&settings.provider).into()
-    } else {
-        settings.base_url.trim().to_string()
-    };
-    settings.api_key = settings.api_key.trim().to_string();
-    settings.model = if settings.model.trim().is_empty() {
-        default_model(&settings.provider).into()
-    } else {
-        settings.model.trim().to_string()
-    };
+    settings.provider_profiles = sanitize_provider_profiles(settings.provider_profiles);
+    let active_profile = sanitize_provider_connection_settings(
+        ProviderConnectionSettingsPayload {
+            base_url: settings.base_url,
+            api_key: settings.api_key,
+            model: settings.model,
+        },
+        &settings.provider,
+    );
+    *provider_profile_mut(&mut settings.provider_profiles, &settings.provider) =
+        active_profile.clone();
+    settings.base_url = active_profile.base_url;
+    settings.api_key = active_profile.api_key;
+    settings.model = active_profile.model;
     settings.ocr_interval_ms = settings.ocr_interval_ms.clamp(250, 4_000);
     settings.stable_frames = settings.stable_frames.clamp(1, 10);
     settings.similarity_threshold = settings.similarity_threshold.clamp(0.5, 1.0);
@@ -387,9 +630,7 @@ fn sanitize_ocr_region_state(mut state: OcrRegionStatePayload) -> OcrRegionState
 
 fn is_valid_hex_color(value: &str) -> bool {
     let chars: Vec<char> = value.chars().collect();
-    chars.len() == 7
-        && chars[0] == '#'
-        && chars[1..].iter().all(|c| c.is_ascii_hexdigit())
+    chars.len() == 7 && chars[0] == '#' && chars[1..].iter().all(|c| c.is_ascii_hexdigit())
 }
 
 fn is_opacity_selected(current: f64, candidate: f64) -> bool {
@@ -576,10 +817,7 @@ fn effective_overlay_visibility(overlay: &OverlayStatePayload, ctrl_pressed: boo
     overlay.visible && !ctrl_pressed
 }
 
-fn apply_window_visibility(
-    window: &tauri::WebviewWindow,
-    visible: bool,
-) -> Result<(), String> {
+fn apply_window_visibility(window: &tauri::WebviewWindow, visible: bool) -> Result<(), String> {
     if visible {
         window.show().map_err(|err| err.to_string())?;
     } else {
@@ -652,12 +890,10 @@ fn apply_window_state(
         .set_ignore_cursor_events(overlay.locked && overlay.click_through_when_locked)
         .map_err(|err| err.to_string())?;
     window
-        .set_content_protected(matches!(
-            overlay.appearance,
-            OverlayAppearance::Pixelate
-        ))
+        .set_content_protected(matches!(overlay.appearance, OverlayAppearance::Pixelate))
         .map_err(|err| err.to_string())?;
-    window.set_effects(None::<tauri::utils::config::WindowEffectsConfig>)
+    window
+        .set_effects(None::<tauri::utils::config::WindowEffectsConfig>)
         .map_err(|err| err.to_string())?;
 
     apply_window_visibility(&window, effective_overlay_visibility(overlay, ctrl_pressed))
@@ -729,7 +965,10 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
     Ok(window)
 }
 
-fn apply_ocr_region_window_state(app: &AppHandle, region: &OcrRegionStatePayload) -> Result<(), String> {
+fn apply_ocr_region_window_state(
+    app: &AppHandle,
+    region: &OcrRegionStatePayload,
+) -> Result<(), String> {
     let window = ensure_ocr_region_window(app)?;
 
     window
@@ -744,7 +983,9 @@ fn apply_ocr_region_window_state(app: &AppHandle, region: &OcrRegionStatePayload
         window.center().map_err(|err| err.to_string())?;
     }
 
-    window.set_ignore_cursor_events(false).map_err(|err| err.to_string())?;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|err| err.to_string())?;
     apply_window_visibility(&window, region.visible)
 }
 
@@ -940,13 +1181,19 @@ fn set_refresh_rate(app: &AppHandle, refresh_rate: u32) -> Result<OverlayStatePa
     })
 }
 
-fn set_pixel_detail(app: &AppHandle, pixel_detail: PixelDetail) -> Result<OverlayStatePayload, String> {
+fn set_pixel_detail(
+    app: &AppHandle,
+    pixel_detail: PixelDetail,
+) -> Result<OverlayStatePayload, String> {
     update_overlay_state(app, true, false, |shared| {
         shared.overlay.pixel_detail = pixel_detail;
     })
 }
 
-fn set_appearance(app: &AppHandle, appearance: OverlayAppearance) -> Result<OverlayStatePayload, String> {
+fn set_appearance(
+    app: &AppHandle,
+    appearance: OverlayAppearance,
+) -> Result<OverlayStatePayload, String> {
     update_overlay_state(app, true, false, |shared| {
         shared.overlay.appearance = appearance;
     })
@@ -964,7 +1211,9 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
     let scale_factor = main_window.scale_factor().map_err(|err| err.to_string())?;
-    let position = main_window.outer_position().map_err(|err| err.to_string())?;
+    let position = main_window
+        .outer_position()
+        .map_err(|err| err.to_string())?;
     let size = main_window.inner_size().map_err(|err| err.to_string())?;
 
     let region = update_ocr_region_state(app, false, true, move |shared| {
@@ -977,7 +1226,8 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
         if shared.ocr_region.width <= DEFAULT_OCR_REGION_WIDTH
             && shared.ocr_region.height <= DEFAULT_OCR_REGION_HEIGHT
         {
-            shared.ocr_region.width = (f64::from(size.width) / scale_factor).max(MIN_OCR_REGION_WIDTH);
+            shared.ocr_region.width =
+                (f64::from(size.width) / scale_factor).max(MIN_OCR_REGION_WIDTH);
             shared.ocr_region.height =
                 (f64::from(size.height) / scale_factor).max(MIN_OCR_REGION_HEIGHT);
         }
@@ -1175,10 +1425,7 @@ fn read_process_line_lossy<R: Read>(reader: &mut BufReader<R>) -> Result<Option<
     Ok(Some(String::from_utf8_lossy(&buffer).trim().to_string()))
 }
 
-fn with_python_sidecar<R, T>(
-    app: &AppHandle,
-    request: &SidecarRequest<T>,
-) -> Result<R, String>
+fn with_python_sidecar<R, T>(app: &AppHandle, request: &SidecarRequest<T>) -> Result<R, String>
 where
     R: DeserializeOwned,
     T: Serialize,
@@ -1211,12 +1458,13 @@ where
         return Err("Python sidecar 返回了空响应".into());
     }
 
-    let response = serde_json::from_str::<SidecarResponse<R>>(&response_line).map_err(|err| {
-        format!("sidecar 返回 JSON 解析失败：{err}；原始输出：{response_line}")
-    })?;
+    let response = serde_json::from_str::<SidecarResponse<R>>(&response_line)
+        .map_err(|err| format!("sidecar 返回 JSON 解析失败：{err}；原始输出：{response_line}"))?;
 
     if !response.ok {
-        return Err(response.error.unwrap_or_else(|| "sidecar 返回未知错误".into()));
+        return Err(response
+            .error
+            .unwrap_or_else(|| "sidecar 返回未知错误".into()));
     }
 
     response
@@ -1309,7 +1557,13 @@ fn run_subtitle_analysis_blocking(
     let image_path = match capture_ocr_region_image(app) {
         Ok(path) => path,
         Err(err) => {
-            let _ = set_subtitle_status(app, false, "error", "抓取 OCR 区域失败。", Some(err.clone()));
+            let _ = set_subtitle_status(
+                app,
+                false,
+                "error",
+                "抓取 OCR 区域失败。",
+                Some(err.clone()),
+            );
             return Err(err);
         }
     };
@@ -1356,22 +1610,14 @@ fn build_overlay_menu(
     let visibility = MenuItem::with_id(
         app,
         MENU_TOGGLE_VISIBLE,
-        if overlay.visible {
-            "隐藏"
-        } else {
-            "显示"
-        },
+        if overlay.visible { "隐藏" } else { "显示" },
         true,
         Some("Ctrl+Alt+H"),
     )?;
     let _lock_legacy = MenuItem::with_id(
         app,
         "toggle_lock_legacy_unused",
-        if overlay.locked {
-            "解锁"
-        } else {
-            "锁定"
-        },
+        if overlay.locked { "解锁" } else { "锁定" },
         true,
         None::<&str>,
     )?;
@@ -1408,13 +1654,8 @@ fn build_overlay_menu(
         true,
         None::<&str>,
     )?;
-    let more_settings = MenuItem::with_id(
-        app,
-        MENU_OPEN_MORE_SETTINGS,
-        "更多设置",
-        true,
-        None::<&str>,
-    )?;
+    let more_settings =
+        MenuItem::with_id(app, MENU_OPEN_MORE_SETTINGS, "更多设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
     let always_on_top = CheckMenuItem::with_id(
         app,
@@ -1438,7 +1679,7 @@ fn build_overlay_menu(
         MENU_OPACITY_40,
         "40%",
         true,
-        is_opacity_selected(overlay.opacity, 0.4), 
+        is_opacity_selected(overlay.opacity, 0.4),
         None::<&str>,
     )?;
     let opacity_60 = CheckMenuItem::with_id(
@@ -1778,6 +2019,27 @@ fn reset_subtitle_explain_settings(
 }
 
 #[tauri::command]
+async fn fetch_available_subtitle_models(
+    provider: SubtitleProvider,
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    let base_url = normalize_base_url(&base_url, &provider);
+    let api_key = api_key.trim().to_string();
+
+    let models = match provider {
+        SubtitleProvider::OpenAiResponses => fetch_openai_models(&base_url, &api_key).await?,
+        SubtitleProvider::Ollama => fetch_ollama_models(&base_url, &api_key).await?,
+    };
+
+    if models.is_empty() {
+        return Err("当前接口未返回任何可用模型。".into());
+    }
+
+    Ok(models)
+}
+
+#[tauri::command]
 fn load_subtitle_status(app: AppHandle) -> Result<SubtitleStatusPayload, String> {
     current_subtitle_status(&app)
 }
@@ -1790,9 +2052,7 @@ fn load_latest_subtitle_result(
 }
 
 #[tauri::command]
-async fn analyze_current_subtitle(
-    app: AppHandle,
-) -> Result<SubtitleAnalysisResultPayload, String> {
+async fn analyze_current_subtitle(app: AppHandle) -> Result<SubtitleAnalysisResultPayload, String> {
     tauri::async_runtime::spawn_blocking(move || run_subtitle_analysis_blocking(&app))
         .await
         .map_err(|err| err.to_string())?
@@ -1918,14 +2178,12 @@ fn is_virtual_key_pressed(virtual_key: i32) -> bool {
 fn current_ctrl_hide_active() -> bool {
     let ctrl_pressed =
         is_virtual_key_pressed(VK_LCONTROL as i32) || is_virtual_key_pressed(VK_RCONTROL as i32);
-    let alt_pressed =
-        is_virtual_key_pressed(VK_MENU as i32)
-            || is_virtual_key_pressed(VK_LMENU as i32)
-            || is_virtual_key_pressed(VK_RMENU as i32);
-    let shift_pressed =
-        is_virtual_key_pressed(VK_SHIFT as i32)
-            || is_virtual_key_pressed(VK_LSHIFT as i32)
-            || is_virtual_key_pressed(VK_RSHIFT as i32);
+    let alt_pressed = is_virtual_key_pressed(VK_MENU as i32)
+        || is_virtual_key_pressed(VK_LMENU as i32)
+        || is_virtual_key_pressed(VK_RMENU as i32);
+    let shift_pressed = is_virtual_key_pressed(VK_SHIFT as i32)
+        || is_virtual_key_pressed(VK_LSHIFT as i32)
+        || is_virtual_key_pressed(VK_RSHIFT as i32);
     let win_pressed =
         is_virtual_key_pressed(VK_LWIN as i32) || is_virtual_key_pressed(VK_RWIN as i32);
 
@@ -2109,6 +2367,7 @@ pub fn run() {
             load_subtitle_explain_settings,
             save_subtitle_explain_settings,
             reset_subtitle_explain_settings,
+            fetch_available_subtitle_models,
             load_subtitle_status,
             load_latest_subtitle_result,
             apply_overlay_state,
