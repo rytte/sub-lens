@@ -37,7 +37,20 @@ SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-SYSTEM_PROMPT = """你是一个字幕学习助手。
+def build_system_prompt(explain_mode: str) -> str:
+    if explain_mode == "word":
+        return """你是一个字幕学习助手。
+你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
+要求：
+1. translation：给出自然、简洁的整句中文翻译。
+2. phrases：按原句顺序，尽量逐词或逐个语法成分拆开解释，最多输出 12 项。
+3. 请优先拆出单词、助词、时态变化、固定搭配中的关键组成部分，而不是只挑宽泛短语。
+4. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。
+5. explanation 用简体中文，简洁说明词义、语法作用或在句中的含义。
+6. 如果原句是日语等不以空格分词的语言，需要主动完成合理切分。
+7. 所有内容使用简体中文，不要输出任何 JSON 之外的文字。"""
+
+    return """你是一个字幕学习助手。
 你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
 要求：
 1. translation：给出自然、简洁的整句中文翻译。
@@ -312,7 +325,14 @@ def extract_ocr_text(image_path: str) -> str:
     )
 
 
-def build_user_prompt(source_text: str) -> str:
+def build_user_prompt(source_text: str, explain_mode: str) -> str:
+    if explain_mode == "word":
+        return (
+            "请解释下面这句字幕，并尽量按原句顺序逐词或逐个语法成分拆开说明，"
+            "严格按约定 JSON 输出。\n\n"
+            f"字幕：{source_text}"
+        )
+
     return f"请解释下面这句字幕，并严格按约定 JSON 输出。\n\n字幕：{source_text}"
 
 
@@ -349,16 +369,17 @@ def call_openai(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("OpenAI Responses 需要 API Key。")
 
+    explain_mode = str(settings.get("explainMode") or "phrase")
     payload = {
         "model": settings["model"],
         "input": [
             {
                 "role": "system",
-                "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
+                "content": [{"type": "input_text", "text": build_system_prompt(explain_mode)}],
             },
             {
                 "role": "user",
-                "content": [{"type": "input_text", "text": build_user_prompt(source_text)}],
+                "content": [{"type": "input_text", "text": build_user_prompt(source_text, explain_mode)}],
             },
         ],
         "text": {
@@ -386,11 +407,12 @@ def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    explain_mode = str(settings.get("explainMode") or "phrase")
     payload = {
         "model": settings["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(source_text)},
+            {"role": "system", "content": build_system_prompt(explain_mode)},
+            {"role": "user", "content": build_user_prompt(source_text, explain_mode)},
         ],
         "stream": False,
         "think": False,

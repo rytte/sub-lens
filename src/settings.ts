@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type SubtitleProvider = "openAiResponses" | "ollama";
+type SubtitleExplainMode = "phrase" | "word";
 
 type ProviderConnectionSettings = {
   baseUrl: string;
@@ -17,6 +18,7 @@ type SubtitleProviderProfiles = {
 type SubtitleExplainSettings = {
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
+  explainMode: SubtitleExplainMode;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -362,6 +364,7 @@ function collectSettings(): SubtitleExplainSettings {
   return {
     realtimeEnabled: realtimeInput.checked,
     provider: currentSettings.provider,
+    explainMode: currentSettings.explainMode,
     baseUrl: activeProfile.baseUrl,
     apiKey: activeProfile.apiKey,
     model: activeProfile.model,

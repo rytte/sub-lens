@@ -130,6 +130,19 @@ impl Default for SubtitleProvider {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum SubtitleExplainMode {
+    Phrase,
+    Word,
+}
+
+impl Default for SubtitleExplainMode {
+    fn default() -> Self {
+        Self::Word
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PixelFramePayload {
@@ -179,6 +192,7 @@ struct SubtitleProviderProfilesPayload {
 struct SubtitleExplainSettingsPayload {
     realtime_enabled: bool,
     provider: SubtitleProvider,
+    explain_mode: SubtitleExplainMode,
     base_url: String,
     api_key: String,
     model: String,
@@ -299,6 +313,7 @@ impl Default for SubtitleExplainSettingsPayload {
             api_key: active_profile.api_key,
             model: active_profile.model,
             provider,
+            explain_mode: SubtitleExplainMode::default(),
             provider_profiles,
             ocr_interval_ms: 300,
             stable_frames: 2,
@@ -949,7 +964,7 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
         WebviewUrl::App("subtitle-explain.html".into()),
     )
     .title("字幕解释")
-    .inner_size(450.0, 220.0)
+    .inner_size(500.0, 270.0)
     .min_inner_size(360.0, 140.0)
     .resizable(true)
     .decorations(false)
@@ -1998,6 +2013,11 @@ fn load_subtitle_explain_settings(
 }
 
 #[tauri::command]
+fn load_subtitle_explain_mode(app: AppHandle) -> Result<SubtitleExplainMode, String> {
+    Ok(load_saved_subtitle_settings(&app).explain_mode)
+}
+
+#[tauri::command]
 fn save_subtitle_explain_settings(
     app: AppHandle,
     next_settings: SubtitleExplainSettingsPayload,
@@ -2006,6 +2026,18 @@ fn save_subtitle_explain_settings(
     save_subtitle_settings(&app, &next_settings)?;
     refresh_tray_menu(&app, &current_overlay_state(&app)?)?;
     Ok(next_settings)
+}
+
+#[tauri::command]
+fn save_subtitle_explain_mode(
+    app: AppHandle,
+    explain_mode: SubtitleExplainMode,
+) -> Result<SubtitleExplainMode, String> {
+    let mut settings = load_saved_subtitle_settings(&app);
+    settings.explain_mode = explain_mode;
+    let settings = sanitize_subtitle_settings(settings);
+    save_subtitle_settings(&app, &settings)?;
+    Ok(settings.explain_mode)
 }
 
 #[tauri::command]
@@ -2365,7 +2397,9 @@ pub fn run() {
             show_ocr_region,
             hide_ocr_region,
             load_subtitle_explain_settings,
+            load_subtitle_explain_mode,
             save_subtitle_explain_settings,
+            save_subtitle_explain_mode,
             reset_subtitle_explain_settings,
             fetch_available_subtitle_models,
             load_subtitle_status,

@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 type ResizeDirection = "East" | "West";
 type StyleMode = "default" | "contrast";
 type FontScale = "normal" | "large" | "xlarge";
+type ExplainMode = "phrase" | "word";
 
 type SubtitlePhrase = {
   source: string;
@@ -39,6 +40,7 @@ let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
 let styleMode: StyleMode = loadStyleMode();
 let fontScale: FontScale = loadFontScale();
+let explainMode: ExplainMode = "word";
 let windowHovered = false;
 let settingsOpen = false;
 let sizeSyncFrame = 0;
@@ -83,6 +85,18 @@ app.innerHTML = `
             </button>
 
             <div id="settingsPopover" class="settings-popover" role="dialog" aria-label="显示设置">
+              <section class="settings-group">
+                <p class="settings-group-title">解释</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="explainMode" data-value="word">
+                    逐词
+                  </button>
+                  <button class="settings-option" type="button" data-setting="explainMode" data-value="phrase">
+                    短语
+                  </button>
+                </div>
+              </section>
+
               <section class="settings-group">
                 <p class="settings-group-title">样式</p>
                 <div class="settings-options">
@@ -140,7 +154,7 @@ app.innerHTML = `
         </section>
 
         <section class="block block-phrases">
-          <div class="block-title">逐词解释</div>
+          <div id="phrasesTitle" class="block-title">短语解释</div>
           <div id="phrasesList" class="phrase-list empty">暂无逐词解释。</div>
         </section>
       </div>
@@ -169,6 +183,7 @@ const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
 const sourceText = requireElement<HTMLParagraphElement>("#sourceText");
 const translationText = requireElement<HTMLParagraphElement>("#translationText");
+const phrasesTitle = requireElement<HTMLDivElement>("#phrasesTitle");
 const phrasesList = requireElement<HTMLDivElement>("#phrasesList");
 const settingsOptionButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".settings-option[data-setting][data-value]"),
@@ -193,12 +208,14 @@ async function init() {
   }
 
   try {
-    const [initialStatus, initialResult] = await Promise.all([
+    const [initialStatus, initialResult, initialExplainMode] = await Promise.all([
       invoke<SubtitleStatus>("load_subtitle_status"),
       invoke<SubtitleResult | null>("load_latest_subtitle_result"),
+      invoke<ExplainMode>("load_subtitle_explain_mode"),
     ]);
     status = initialStatus;
     result = initialResult;
+    explainMode = initialExplainMode;
   } catch (error) {
     status = {
       analyzing: false,
@@ -251,7 +268,7 @@ function bindUi() {
 
   settingsOptionButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      applySetting(button.dataset.setting, button.dataset.value);
+      void applySetting(button.dataset.setting, button.dataset.value);
     });
   });
 
@@ -350,6 +367,10 @@ function applyDisplaySettings() {
   windowContent.dataset.fontScale = fontScale;
   windowContent.dataset.hovered =
     styleMode === "contrast" && windowHovered ? "true" : "false";
+  phrasesTitle.textContent = phrasesSectionTitle();
+  if (!result || phrasesList.classList.contains("empty")) {
+    phrasesList.textContent = emptyPhrasesText();
+  }
   syncSettingsOptions();
   syncSettingsPopover();
 }
@@ -358,6 +379,7 @@ function syncSettingsOptions() {
   settingsOptionButtons.forEach((button) => {
     const { setting, value } = button.dataset;
     const active =
+      (setting === "explainMode" && value === explainMode) ||
       (setting === "styleMode" && value === styleMode) ||
       (setting === "fontScale" && value === fontScale);
     button.dataset.active = active ? "true" : "false";
@@ -379,8 +401,30 @@ function syncSettingsPopover() {
   settingsPopover.dataset.open = settingsOpen ? "true" : "false";
 }
 
-function applySetting(setting?: string, value?: string) {
+async function applySetting(setting?: string, value?: string) {
   if (!setting || !value) {
+    return;
+  }
+
+  if (setting === "explainMode" && (value === "phrase" || value === "word")) {
+    const previousMode = explainMode;
+    explainMode = value;
+    applyDisplaySettings();
+    scheduleWindowSizeSync();
+
+    try {
+      explainMode = await invoke<ExplainMode>("save_subtitle_explain_mode", {
+        explainMode,
+      });
+    } catch (error) {
+      explainMode = previousMode;
+      applyDisplaySettings();
+      statusText.textContent = `切换解释模式失败：${String(error)}`;
+      statusText.dataset.state = "error";
+      return;
+    }
+
+    applyDisplaySettings();
     return;
   }
 
@@ -396,6 +440,14 @@ function applySetting(setting?: string, value?: string) {
 
   applyDisplaySettings();
   scheduleWindowSizeSync();
+}
+
+function phrasesSectionTitle() {
+  return explainMode === "word" ? "逐词解释" : "短语解释";
+}
+
+function emptyPhrasesText() {
+  return explainMode === "word" ? "暂无逐词解释。" : "暂无短语解释。";
 }
 
 function persistSetting(key: string, value: string) {
@@ -484,7 +536,7 @@ function render() {
   if (!result) {
     sourceText.textContent = "等待 OCR 结果...";
     translationText.textContent = "等待 LLM 输出...";
-    phrasesList.innerHTML = "暂无逐词解释。";
+    phrasesList.innerHTML = emptyPhrasesText();
     setEmptyState(sourceText, true);
     setEmptyState(translationText, true);
     setEmptyState(phrasesList, true);
