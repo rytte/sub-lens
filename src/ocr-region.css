@@ -45,11 +45,14 @@ button {
 }
 
 .region-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 16px;
+  right: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 16px 18px;
 }
 
 .eyebrow {
@@ -67,6 +70,8 @@ button {
 }
 
 .done-button {
+  position: relative;
+  z-index: 3;
   min-width: 64px;
   min-height: 30px;
   padding: 0 10px;
@@ -76,6 +81,55 @@ button {
   background: linear-gradient(180deg, #c7dcff 0%, #8eb8ff 100%);
   cursor: pointer;
   transform: translateY(-4px);
+}
+
+@media (max-height: 76px) {
+  .region-toolbar {
+    top: 6px;
+    left: 8px;
+    right: 8px;
+    justify-content: flex-end;
+  }
+
+  .region-toolbar > div {
+    display: none;
+  }
+
+  .done-button {
+    min-width: 24px;
+    min-height: 24px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    transform: none;
+    font-size: 0;
+    line-height: 1;
+  }
+
+  .done-button::before {
+    content: "✓";
+    font-size: 12px;
+    font-weight: 700;
+  }
+}
+
+@media (max-height: 28px) {
+  .region-toolbar {
+    top: 1px;
+    left: 1px;
+    right: 1px;
+  }
+
+  .done-button {
+    min-width: 18px;
+    min-height: 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  .done-button::before {
+    font-size: 10px;
+  }
 }
 
 .resize-handle {

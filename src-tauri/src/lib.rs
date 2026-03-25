@@ -55,7 +55,7 @@ const MIN_HEIGHT: f64 = 36.0;
 const DEFAULT_OCR_REGION_WIDTH: f64 = 720.0;
 const DEFAULT_OCR_REGION_HEIGHT: f64 = 156.0;
 const MIN_OCR_REGION_WIDTH: f64 = 240.0;
-const MIN_OCR_REGION_HEIGHT: f64 = 36.0;
+const MIN_OCR_REGION_HEIGHT: f64 = 20.0;
 const CTRL_HIDE_POLL_INTERVAL_MS: u64 = 16;
 const OCR_CAPTURE_SETTLE_MS: u64 = 320;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
@@ -163,7 +163,6 @@ struct OverlayStatePayload {
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleExplainSettingsPayload {
-    enabled: bool,
     realtime_enabled: bool,
     provider: SubtitleProvider,
     base_url: String,
@@ -257,7 +256,6 @@ impl Default for SubtitleExplainSettingsPayload {
     fn default() -> Self {
         let provider = SubtitleProvider::default();
         Self {
-            enabled: false,
             realtime_enabled: false,
             base_url: default_base_url(&provider).into(),
             api_key: String::new(),
@@ -667,6 +665,12 @@ fn apply_window_state(
 
 fn ensure_ocr_region_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
+        window
+            .set_min_size(Some(LogicalSize::new(
+                MIN_OCR_REGION_WIDTH,
+                MIN_OCR_REGION_HEIGHT,
+            )))
+            .map_err(|err| err.to_string())?;
         return Ok(window);
     }
 
@@ -689,6 +693,12 @@ fn ensure_ocr_region_window(app: &AppHandle) -> Result<tauri::WebviewWindow, Str
     .map_err(|err| err.to_string())?;
 
     disable_window_transitions(&window)?;
+    window
+        .set_min_size(Some(LogicalSize::new(
+            MIN_OCR_REGION_WIDTH,
+            MIN_OCR_REGION_HEIGHT,
+        )))
+        .map_err(|err| err.to_string())?;
     Ok(window)
 }
 
@@ -703,7 +713,7 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
         WebviewUrl::App("subtitle-explain.html".into()),
     )
     .title("字幕解释")
-    .inner_size(420.0, 332.0)
+    .inner_size(450.0, 600.0)
     .min_inner_size(360.0, 260.0)
     .resizable(true)
     .decorations(false)
@@ -1271,22 +1281,13 @@ fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn preprocess_ocr_image(image: image::RgbaImage) -> image::RgbaImage {
     let grayscale = DynamicImage::ImageRgba8(image).grayscale();
-    let doubled = grayscale.resize(
-        grayscale.width().saturating_mul(2).max(1),
-        grayscale.height().saturating_mul(2).max(1),
-        FilterType::Triangle,
-    );
-    doubled.adjust_contrast(24.0).to_rgba8()
+    grayscale.adjust_contrast(24.0).to_rgba8()
 }
 
 fn run_subtitle_analysis_blocking(
     app: &AppHandle,
 ) -> Result<SubtitleAnalysisResultPayload, String> {
     let settings = load_saved_subtitle_settings(app);
-    if !settings.enabled {
-        return Err("字幕解析功能尚未启用，请先在“更多设置”中打开。".into());
-    }
-
     let status = current_subtitle_status(app)?;
     if status.analyzing {
         return Err("已有一条字幕正在解析中，请稍后再试。".into());

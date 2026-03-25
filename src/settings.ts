@@ -4,7 +4,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 type SubtitleProvider = "openAiResponses" | "ollama";
 
 type SubtitleExplainSettings = {
-  enabled: boolean;
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
   baseUrl: string;
@@ -44,16 +43,9 @@ app.innerHTML = `
       <div class="section-head">
         <div>
           <h2>功能开关</h2>
-          <p>默认关闭，先以手动解析为主，实时解析作为增强项预留。</p>
+          <p>当前默认以手动解析为主，实时解析作为增强项预留。</p>
         </div>
       </div>
-      <label class="toggle-row">
-        <div>
-          <span class="field-label">启用字幕解析</span>
-          <span class="field-help">开启后才会启用后续 OCR / LLM 相关能力。</span>
-        </div>
-        <input id="enabledInput" type="checkbox" class="toggle-input" />
-      </label>
       <label class="toggle-row">
         <div>
           <span class="field-label">实时解析</span>
@@ -137,7 +129,6 @@ function requireElement<T extends HTMLElement>(selector: string): T {
   return element;
 }
 
-const enabledInput = requireElement<HTMLInputElement>("#enabledInput");
 const realtimeInput = requireElement<HTMLInputElement>("#realtimeInput");
 const providerInput = requireElement<HTMLSelectElement>("#providerInput");
 const baseUrlInput = requireElement<HTMLInputElement>("#baseUrlInput");
@@ -196,7 +187,6 @@ function bindUi() {
 }
 
 function render(settings: SubtitleExplainSettings) {
-  enabledInput.checked = settings.enabled;
   realtimeInput.checked = settings.realtimeEnabled;
   providerInput.value = settings.provider;
   baseUrlInput.value = settings.baseUrl;
@@ -237,7 +227,6 @@ function collectSettings(): SubtitleExplainSettings {
   }
 
   return {
-    enabled: enabledInput.checked,
     realtimeEnabled: realtimeInput.checked,
     provider: providerInput.value as SubtitleProvider,
     baseUrl: baseUrlInput.value.trim(),
