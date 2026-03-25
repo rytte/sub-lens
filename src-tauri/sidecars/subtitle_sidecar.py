@@ -18,7 +18,7 @@ SCHEMA: dict[str, Any] = {
         "translation": {"type": "string"},
         "phrases": {
             "type": "array",
-            "maxItems": 6,
+            "maxItems": 12,
             "items": {
                 "type": "object",
                 "properties": {
@@ -41,7 +41,7 @@ SYSTEM_PROMPT = """你是一个字幕学习助手。
 你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
 要求：
 1. translation：给出自然、简洁的整句中文翻译。
-2. phrases：挑 0~6 个关键短语或搭配，逐个用中文解释。
+2. phrases：挑 0~12 个关键短语或搭配，逐个用中文解释。
 3. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。
 4. 所有内容使用简体中文。
 5. 不要输出任何 JSON 之外的文字。"""
@@ -436,7 +436,7 @@ def normalize_result(
     return {
         "sourceText": source_text,
         "translation": str(llm_output.get("translation") or "").strip(),
-        "phrases": phrases[:6],
+        "phrases": phrases[:12],
     }
 
 

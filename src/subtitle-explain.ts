@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type ResizeDirection = "East" | "West";
 type StyleMode = "default" | "contrast";
+type FontScale = "normal" | "large" | "xlarge";
 
 type SubtitlePhrase = {
   source: string;
@@ -27,6 +28,7 @@ type SubtitleStatus = {
 const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
 const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
+const FONT_SCALE_STORAGE_KEY = "subtitle-explain-font-scale";
 const WINDOW_MIN_WIDTH = 360;
 const WINDOW_MIN_HEIGHT = 140;
 const WINDOW_MAX_HEIGHT = 800;
@@ -36,7 +38,9 @@ const appWindow = getCurrentWindow();
 let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
 let styleMode: StyleMode = loadStyleMode();
+let fontScale: FontScale = loadFontScale();
 let windowHovered = false;
+let settingsOpen = false;
 let sizeSyncFrame = 0;
 let windowResizeObserver: ResizeObserver | null = null;
 let sizeSyncTimeout = 0;
@@ -66,9 +70,47 @@ app.innerHTML = `
           <button id="editOcrButton" class="action-button" type="button">
             编辑 OCR 区域
           </button>
-          <button id="styleToggleButton" class="action-button" type="button">
-            黑字样式
-          </button>
+          <div class="settings-menu">
+            <button
+              id="settingsMenuButton"
+              class="action-button action-button-menu"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+            >
+              显示
+              <span class="action-caret" aria-hidden="true">▾</span>
+            </button>
+
+            <div id="settingsPopover" class="settings-popover" role="dialog" aria-label="显示设置">
+              <section class="settings-group">
+                <p class="settings-group-title">样式</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="styleMode" data-value="default">
+                    默认
+                  </button>
+                  <button class="settings-option" type="button" data-setting="styleMode" data-value="contrast">
+                    黑字
+                  </button>
+                </div>
+              </section>
+
+              <section class="settings-group">
+                <p class="settings-group-title">字号</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="fontScale" data-value="normal">
+                    标准
+                  </button>
+                  <button class="settings-option" type="button" data-setting="fontScale" data-value="large">
+                    偏大
+                  </button>
+                  <button class="settings-option" type="button" data-setting="fontScale" data-value="xlarge">
+                    更大
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
           <button id="analyzeButton" class="action-button action-button-primary" type="button">
             解析当前字幕
           </button>
@@ -120,12 +162,17 @@ const windowContent = requireElement<HTMLElement>(".subtitle-window");
 const statusRow = requireElement<HTMLDivElement>(".status-row");
 const contentStack = requireElement<HTMLDivElement>(".content-stack");
 const editOcrButton = requireElement<HTMLButtonElement>("#editOcrButton");
-const styleToggleButton = requireElement<HTMLButtonElement>("#styleToggleButton");
+const settingsMenu = requireElement<HTMLDivElement>(".settings-menu");
+const settingsMenuButton = requireElement<HTMLButtonElement>("#settingsMenuButton");
+const settingsPopover = requireElement<HTMLDivElement>("#settingsPopover");
 const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
 const sourceText = requireElement<HTMLParagraphElement>("#sourceText");
 const translationText = requireElement<HTMLParagraphElement>("#translationText");
 const phrasesList = requireElement<HTMLDivElement>("#phrasesList");
+const settingsOptionButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".settings-option[data-setting][data-value]"),
+);
 const resizeHandles = Array.from(
   document.querySelectorAll<HTMLButtonElement>("[data-direction]"),
 );
@@ -133,7 +180,7 @@ const resizeHandles = Array.from(
 async function init() {
   bindUi();
   bindEvents();
-  applyStyleMode();
+  applyDisplaySettings();
 
   try {
     await appWindow.setSizeConstraints({
@@ -193,8 +240,19 @@ function bindUi() {
     void invoke("show_ocr_region");
   });
 
-  styleToggleButton.addEventListener("click", () => {
-    toggleStyleMode();
+  settingsMenuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setSettingsOpen(!settingsOpen);
+  });
+
+  settingsPopover.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+
+  settingsOptionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applySetting(button.dataset.setting, button.dataset.value);
+    });
   });
 
   hideButton.addEventListener("click", () => {
@@ -207,6 +265,20 @@ function bindUi() {
 
   windowContent.addEventListener("pointerleave", () => {
     setWindowHovered(false);
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!(event.target instanceof Node) || settingsMenu.contains(event.target)) {
+      return;
+    }
+
+    setSettingsOpen(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setSettingsOpen(false);
+    }
   });
 }
 
@@ -264,25 +336,74 @@ function loadStyleMode(): StyleMode {
   }
 }
 
-function toggleStyleMode() {
-  styleMode = styleMode === "default" ? "contrast" : "default";
-
+function loadFontScale(): FontScale {
   try {
-    window.localStorage.setItem(STYLE_MODE_STORAGE_KEY, styleMode);
+    const value = window.localStorage.getItem(FONT_SCALE_STORAGE_KEY);
+    return value === "large" || value === "xlarge" ? value : "normal";
   } catch {
-    // Ignore storage failures and keep the current in-memory selection.
+    return "normal";
+  }
+}
+
+function applyDisplaySettings() {
+  windowContent.dataset.styleMode = styleMode;
+  windowContent.dataset.fontScale = fontScale;
+  windowContent.dataset.hovered =
+    styleMode === "contrast" && windowHovered ? "true" : "false";
+  syncSettingsOptions();
+  syncSettingsPopover();
+}
+
+function syncSettingsOptions() {
+  settingsOptionButtons.forEach((button) => {
+    const { setting, value } = button.dataset;
+    const active =
+      (setting === "styleMode" && value === styleMode) ||
+      (setting === "fontScale" && value === fontScale);
+    button.dataset.active = active ? "true" : "false";
+  });
+}
+
+function setSettingsOpen(nextOpen: boolean) {
+  if (settingsOpen === nextOpen) {
+    return;
   }
 
-  applyStyleMode();
+  settingsOpen = nextOpen;
+  syncSettingsPopover();
+}
+
+function syncSettingsPopover() {
+  settingsMenuButton.dataset.open = settingsOpen ? "true" : "false";
+  settingsMenuButton.setAttribute("aria-expanded", settingsOpen ? "true" : "false");
+  settingsPopover.dataset.open = settingsOpen ? "true" : "false";
+}
+
+function applySetting(setting?: string, value?: string) {
+  if (!setting || !value) {
+    return;
+  }
+
+  if (setting === "styleMode" && (value === "default" || value === "contrast")) {
+    styleMode = value;
+    persistSetting(STYLE_MODE_STORAGE_KEY, styleMode);
+  }
+
+  if (setting === "fontScale" && (value === "normal" || value === "large" || value === "xlarge")) {
+    fontScale = value;
+    persistSetting(FONT_SCALE_STORAGE_KEY, fontScale);
+  }
+
+  applyDisplaySettings();
   scheduleWindowSizeSync();
 }
 
-function applyStyleMode() {
-  windowContent.dataset.styleMode = styleMode;
-  windowContent.dataset.hovered =
-    styleMode === "contrast" && windowHovered ? "true" : "false";
-  styleToggleButton.textContent = styleMode === "default" ? "黑字样式" : "默认样式";
-  styleToggleButton.title = styleMode === "default" ? "切换到黑字样式" : "切换到默认样式";
+function persistSetting(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures and keep the current in-memory selection.
+  }
 }
 
 function setWindowHovered(nextHovered: boolean) {
