@@ -12,7 +12,7 @@ const LEGACY_FONT_SCALE_MAP = {
 } as const;
 
 type ResizeDirection = "East" | "West";
-type StyleMode = "default" | "contrast";
+type StyleMode = "default" | "contrast" | "contrastLight";
 type FontScale = (typeof FONT_SCALE_VALUES)[number];
 type ExplainMode = "phrase" | "word";
 type SubtitleProvider = "openAiResponses" | "ollama";
@@ -140,11 +140,11 @@ app.innerHTML = `
               aria-haspopup="dialog"
               aria-expanded="false"
             >
-              显示
+              设置
               <span class="action-caret" aria-hidden="true">▾</span>
             </button>
 
-            <div id="settingsPopover" class="settings-popover" role="dialog" aria-label="显示设置">
+            <div id="settingsPopover" class="settings-popover" role="dialog" aria-label="设置">
               <section class="settings-group">
                 <p class="settings-group-title">解释</p>
                 <div class="settings-options">
@@ -165,6 +165,9 @@ app.innerHTML = `
                   </button>
                   <button class="settings-option" type="button" data-setting="styleMode" data-value="contrast">
                     黑字
+                  </button>
+                  <button class="settings-option" type="button" data-setting="styleMode" data-value="contrastLight">
+                    白字
                   </button>
                 </div>
               </section>
@@ -475,12 +478,16 @@ function scheduleWindowSizeSync(delay = 0) {
 
 function loadStyleMode(): StyleMode {
   try {
-    return window.localStorage.getItem(STYLE_MODE_STORAGE_KEY) === "contrast"
-      ? "contrast"
-      : "default";
+    const value = window.localStorage.getItem(STYLE_MODE_STORAGE_KEY);
+
+    if (value === "contrast" || value === "contrastLight") {
+      return value;
+    }
   } catch {
     return "default";
   }
+
+  return "default";
 }
 
 function loadFontScale(): FontScale {
@@ -507,7 +514,7 @@ function applyDisplaySettings() {
   windowContent.dataset.styleMode = styleMode;
   windowContent.style.setProperty("--content-font-scale", fontScale);
   windowContent.dataset.hovered =
-    styleMode === "contrast" && windowHovered ? "true" : "false";
+    styleMode !== "default" && windowHovered ? "true" : "false";
   syncCollapsedState();
   phrasesTitle.textContent = phrasesSectionTitle();
   if (!result || phrasesList.classList.contains("empty")) {
@@ -600,7 +607,10 @@ async function applySetting(setting?: string, value?: string) {
     return;
   }
 
-  if (setting === "styleMode" && (value === "default" || value === "contrast")) {
+  if (
+    setting === "styleMode" &&
+    (value === "default" || value === "contrast" || value === "contrastLight")
+  ) {
     styleMode = value;
     persistSetting(STYLE_MODE_STORAGE_KEY, styleMode);
   }
@@ -690,7 +700,7 @@ function setWindowHovered(nextHovered: boolean) {
   }
 
   windowHovered = nextHovered;
-  if (styleMode === "contrast") {
+  if (styleMode !== "default") {
     windowContent.dataset.hovered = nextHovered ? "true" : "false";
   }
 }

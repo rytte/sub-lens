@@ -542,7 +542,8 @@ button {
   color: rgba(255, 255, 255, 0.48);
 }
 
-.subtitle-window[data-style-mode="contrast"] {
+.subtitle-window[data-style-mode="contrast"],
+.subtitle-window[data-style-mode="contrastLight"] {
   border-color: transparent;
   background: transparent;
 }
@@ -552,9 +553,17 @@ button {
   background: rgba(255, 255, 255, 0.58);
 }
 
+.subtitle-window[data-style-mode="contrastLight"][data-hovered="true"] {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.58);
+}
+
 .subtitle-window[data-style-mode="contrast"] .status-row,
+.subtitle-window[data-style-mode="contrastLight"] .status-row,
 .subtitle-window[data-style-mode="contrast"] .block,
-.subtitle-window[data-style-mode="contrast"] .phrase-item {
+.subtitle-window[data-style-mode="contrastLight"] .block,
+.subtitle-window[data-style-mode="contrast"] .phrase-item,
+.subtitle-window[data-style-mode="contrastLight"] .phrase-item {
   background: transparent;
   box-shadow: none;
 }
@@ -680,4 +689,127 @@ button {
 
 .subtitle-window[data-style-mode="contrast"] .empty {
   color: rgba(0, 0, 0, 0.5);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .status-label,
+.subtitle-window[data-style-mode="contrastLight"] .status-text,
+.subtitle-window[data-style-mode="contrastLight"] .summary-label,
+.subtitle-window[data-style-mode="contrastLight"] .block-title,
+.subtitle-window[data-style-mode="contrastLight"] .summary-text,
+.subtitle-window[data-style-mode="contrastLight"] .phrase-item span,
+.subtitle-window[data-style-mode="contrastLight"] .action-button {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .summary-divider {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .drag-pill {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button-menu[data-open="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button-primary {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button-primary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .action-button-toggle-live[data-enabled="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .status-text[data-state="running"] {
+  color: #b9d3ff;
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .status-text[data-state="error"] {
+  color: #ffb9b9;
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .phrase-item strong {
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-popover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.9);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.32);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-group + .settings-group {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-group-title,
+.subtitle-window[data-style-mode="contrastLight"] .settings-option {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-option {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-option[data-active="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-value,
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-labels {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-input::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-input::-webkit-slider-thumb {
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-input::-moz-range-track {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .settings-slider-input::-moz-range-thumb {
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .content-stack::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .empty {
+  color: rgba(255, 255, 255, 0.5);
 }
