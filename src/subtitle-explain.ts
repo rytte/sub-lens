@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type ResizeDirection = "East" | "West";
+type StyleMode = "default" | "contrast";
 
 type SubtitlePhrase = {
   source: string;
@@ -25,6 +26,7 @@ type SubtitleStatus = {
 
 const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
+const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
 const WINDOW_MIN_WIDTH = 360;
 const WINDOW_MIN_HEIGHT = 140;
 const WINDOW_MAX_HEIGHT = 800;
@@ -33,6 +35,8 @@ const appWindow = getCurrentWindow();
 
 let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
+let styleMode: StyleMode = loadStyleMode();
+let windowHovered = false;
 let sizeSyncFrame = 0;
 let windowResizeObserver: ResizeObserver | null = null;
 let sizeSyncTimeout = 0;
@@ -61,6 +65,9 @@ app.innerHTML = `
         <div class="action-row">
           <button id="editOcrButton" class="action-button" type="button">
             编辑 OCR 区域
+          </button>
+          <button id="styleToggleButton" class="action-button" type="button">
+            黑字样式
           </button>
           <button id="analyzeButton" class="action-button action-button-primary" type="button">
             解析当前字幕
@@ -113,6 +120,7 @@ const windowContent = requireElement<HTMLElement>(".subtitle-window");
 const statusRow = requireElement<HTMLDivElement>(".status-row");
 const contentStack = requireElement<HTMLDivElement>(".content-stack");
 const editOcrButton = requireElement<HTMLButtonElement>("#editOcrButton");
+const styleToggleButton = requireElement<HTMLButtonElement>("#styleToggleButton");
 const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
 const sourceText = requireElement<HTMLParagraphElement>("#sourceText");
@@ -125,6 +133,7 @@ const resizeHandles = Array.from(
 async function init() {
   bindUi();
   bindEvents();
+  applyStyleMode();
 
   try {
     await appWindow.setSizeConstraints({
@@ -184,8 +193,20 @@ function bindUi() {
     void invoke("show_ocr_region");
   });
 
+  styleToggleButton.addEventListener("click", () => {
+    toggleStyleMode();
+  });
+
   hideButton.addEventListener("click", () => {
     void hideWindow();
+  });
+
+  windowContent.addEventListener("pointerenter", () => {
+    setWindowHovered(true);
+  });
+
+  windowContent.addEventListener("pointerleave", () => {
+    setWindowHovered(false);
   });
 }
 
@@ -233,6 +254,48 @@ function scheduleWindowSizeSync(delay = 0) {
   });
 }
 
+function loadStyleMode(): StyleMode {
+  try {
+    return window.localStorage.getItem(STYLE_MODE_STORAGE_KEY) === "contrast"
+      ? "contrast"
+      : "default";
+  } catch {
+    return "default";
+  }
+}
+
+function toggleStyleMode() {
+  styleMode = styleMode === "default" ? "contrast" : "default";
+
+  try {
+    window.localStorage.setItem(STYLE_MODE_STORAGE_KEY, styleMode);
+  } catch {
+    // Ignore storage failures and keep the current in-memory selection.
+  }
+
+  applyStyleMode();
+  scheduleWindowSizeSync();
+}
+
+function applyStyleMode() {
+  windowContent.dataset.styleMode = styleMode;
+  windowContent.dataset.hovered =
+    styleMode === "contrast" && windowHovered ? "true" : "false";
+  styleToggleButton.textContent = styleMode === "default" ? "黑字样式" : "默认样式";
+  styleToggleButton.title = styleMode === "default" ? "切换到黑字样式" : "切换到默认样式";
+}
+
+function setWindowHovered(nextHovered: boolean) {
+  if (windowHovered === nextHovered) {
+    return;
+  }
+
+  windowHovered = nextHovered;
+  if (styleMode === "contrast") {
+    windowContent.dataset.hovered = nextHovered ? "true" : "false";
+  }
+}
+
 async function syncWindowSize() {
   try {
     const targetHeight = Math.max(
@@ -258,12 +321,23 @@ function getNaturalWindowHeight() {
   const appPaddingBottom = parseFloat(appStyles.paddingBottom) || 0;
   const appBorderTop = parseFloat(appStyles.borderTopWidth) || 0;
   const appBorderBottom = parseFloat(appStyles.borderBottomWidth) || 0;
-  const styles = window.getComputedStyle(windowContent);
-  const paddingTop = parseFloat(styles.paddingTop) || 0;
-  const paddingBottom = parseFloat(styles.paddingBottom) || 0;
-  const borderTop = parseFloat(styles.borderTopWidth) || 0;
-  const borderBottom = parseFloat(styles.borderBottomWidth) || 0;
-  const gap = parseFloat(styles.rowGap || styles.gap) || 0;
+  const windowStyles = window.getComputedStyle(windowContent);
+  const paddingTop = parseFloat(windowStyles.paddingTop) || 0;
+  const paddingBottom = parseFloat(windowStyles.paddingBottom) || 0;
+  const borderTop = parseFloat(windowStyles.borderTopWidth) || 0;
+  const borderBottom = parseFloat(windowStyles.borderBottomWidth) || 0;
+  const windowGap = parseFloat(windowStyles.rowGap || windowStyles.gap) || 0;
+  const contentStyles = window.getComputedStyle(contentStack);
+  const contentPaddingTop = parseFloat(contentStyles.paddingTop) || 0;
+  const contentPaddingBottom = parseFloat(contentStyles.paddingBottom) || 0;
+  const contentGap = parseFloat(contentStyles.rowGap || contentStyles.gap) || 0;
+  const contentChildren = Array.from(contentStack.children) as HTMLElement[];
+  const contentChildrenHeight = contentChildren.reduce(
+    (total, element) => total + element.getBoundingClientRect().height,
+    0,
+  );
+  const contentTotalGap =
+    contentChildren.length > 1 ? contentGap * (contentChildren.length - 1) : 0;
 
   return Math.ceil(
     appPaddingTop +
@@ -275,8 +349,11 @@ function getNaturalWindowHeight() {
       borderTop +
       borderBottom +
       statusRow.getBoundingClientRect().height +
-      gap +
-      contentStack.scrollHeight,
+      windowGap +
+      contentPaddingTop +
+      contentPaddingBottom +
+      contentChildrenHeight +
+      contentTotalGap,
   );
 }
 
