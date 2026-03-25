@@ -43,6 +43,7 @@ let fontScale: FontScale = loadFontScale();
 let explainMode: ExplainMode = "word";
 let windowHovered = false;
 let settingsOpen = false;
+let collapsed = false;
 let sizeSyncFrame = 0;
 let windowResizeObserver: ResizeObserver | null = null;
 let sizeSyncTimeout = 0;
@@ -69,9 +70,6 @@ app.innerHTML = `
           <span id="statusText" class="status-text" data-state="idle">等待手动解析。</span>
         </div>
         <div class="action-row">
-          <button id="editOcrButton" class="action-button" type="button">
-            编辑 OCR 区域
-          </button>
           <div class="settings-menu">
             <button
               id="settingsMenuButton"
@@ -125,8 +123,20 @@ app.innerHTML = `
               </section>
             </div>
           </div>
+          <button id="editOcrButton" class="action-button" type="button">
+            编辑 OCR 区域
+          </button>
           <button id="analyzeButton" class="action-button action-button-primary" type="button">
             解析当前字幕
+          </button>
+          <button
+            id="collapseButton"
+            class="action-button action-button-icon action-button-toggle"
+            type="button"
+            aria-label="收起内容"
+            title="收起内容"
+          >
+            ▴
           </button>
           <button
             id="hideButton"
@@ -137,6 +147,7 @@ app.innerHTML = `
           >
             ×
           </button>
+          <div id="collapsedDragRegion" class="collapsed-drag-region" aria-hidden="true"></div>
         </div>
       </div>
 
@@ -180,7 +191,9 @@ const settingsMenu = requireElement<HTMLDivElement>(".settings-menu");
 const settingsMenuButton = requireElement<HTMLButtonElement>("#settingsMenuButton");
 const settingsPopover = requireElement<HTMLDivElement>("#settingsPopover");
 const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
+const collapseButton = requireElement<HTMLButtonElement>("#collapseButton");
 const hideButton = requireElement<HTMLButtonElement>("#hideButton");
+const collapsedDragRegion = requireElement<HTMLDivElement>("#collapsedDragRegion");
 const sourceText = requireElement<HTMLParagraphElement>("#sourceText");
 const translationText = requireElement<HTMLParagraphElement>("#translationText");
 const phrasesTitle = requireElement<HTMLDivElement>("#phrasesTitle");
@@ -230,13 +243,8 @@ async function init() {
 }
 
 function bindUi() {
-  statusMeta.addEventListener("pointerdown", async (event) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    await appWindow.startDragging();
-  });
+  bindDragRegion(statusMeta);
+  bindDragRegion(collapsedDragRegion);
 
   resizeHandles.forEach((handle) => {
     handle.addEventListener("pointerdown", async (event) => {
@@ -251,6 +259,10 @@ function bindUi() {
 
   analyzeButton.addEventListener("click", () => {
     void analyzeCurrentSubtitle();
+  });
+
+  collapseButton.addEventListener("click", () => {
+    setCollapsed(!collapsed);
   });
 
   editOcrButton.addEventListener("click", () => {
@@ -296,6 +308,16 @@ function bindUi() {
     if (event.key === "Escape") {
       setSettingsOpen(false);
     }
+  });
+}
+
+function bindDragRegion(element: HTMLElement) {
+  element.addEventListener("pointerdown", async (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    await appWindow.startDragging();
   });
 }
 
@@ -367,6 +389,7 @@ function applyDisplaySettings() {
   windowContent.dataset.fontScale = fontScale;
   windowContent.dataset.hovered =
     styleMode === "contrast" && windowHovered ? "true" : "false";
+  syncCollapsedState();
   phrasesTitle.textContent = phrasesSectionTitle();
   if (!result || phrasesList.classList.contains("empty")) {
     phrasesList.textContent = emptyPhrasesText();
@@ -399,6 +422,31 @@ function syncSettingsPopover() {
   settingsMenuButton.dataset.open = settingsOpen ? "true" : "false";
   settingsMenuButton.setAttribute("aria-expanded", settingsOpen ? "true" : "false");
   settingsPopover.dataset.open = settingsOpen ? "true" : "false";
+}
+
+function setCollapsed(nextCollapsed: boolean) {
+  if (collapsed === nextCollapsed) {
+    return;
+  }
+
+  collapsed = nextCollapsed;
+  if (collapsed) {
+    setSettingsOpen(false);
+  }
+  syncCollapsedState();
+  scheduleWindowSizeSync();
+}
+
+function syncCollapsedState() {
+  windowContent.dataset.collapsed = collapsed ? "true" : "false";
+  collapseButton.textContent = collapsed ? "▾" : "▴";
+  collapseButton.setAttribute("aria-label", collapsed ? "展开内容" : "收起内容");
+  collapseButton.title = collapsed ? "展开内容" : "收起内容";
+  if (collapsed) {
+    phrasesTitle.setAttribute("data-tauri-drag-region", "");
+  } else {
+    phrasesTitle.removeAttribute("data-tauri-drag-region");
+  }
 }
 
 async function applySetting(setting?: string, value?: string) {

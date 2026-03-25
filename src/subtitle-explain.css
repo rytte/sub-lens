@@ -68,16 +68,17 @@ button {
 .resize-handle.west {
   top: 0;
   bottom: 0;
-  width: 10px;
 }
 
 .resize-handle.east {
   right: 0;
+  width: 4px;
   cursor: e-resize;
 }
 
 .resize-handle.west {
   left: 0;
+  width: 10px;
   cursor: w-resize;
 }
 
@@ -142,6 +143,10 @@ button {
   z-index: 3;
 }
 
+.collapsed-drag-region {
+  display: none;
+}
+
 .settings-menu {
   position: relative;
 }
@@ -202,6 +207,11 @@ button {
   border-radius: 999px;
   font-size: 18px;
   line-height: 1;
+}
+
+.action-button-toggle {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .settings-popover {
@@ -358,6 +368,47 @@ button {
 
 .block-phrases {
   padding-top: 8px;
+}
+
+.subtitle-window[data-collapsed="true"] .status-meta,
+.subtitle-window[data-collapsed="true"] .settings-menu,
+.subtitle-window[data-collapsed="true"] #editOcrButton,
+.subtitle-window[data-collapsed="true"] #analyzeButton,
+.subtitle-window[data-collapsed="true"] .block-summary {
+  display: none;
+}
+
+.subtitle-window[data-collapsed="true"] .status-row {
+  min-height: 30px;
+  align-items: center;
+  padding-bottom: 0;
+}
+
+.subtitle-window[data-collapsed="true"] .action-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.subtitle-window[data-collapsed="true"] .content-stack {
+  gap: 0;
+}
+
+.subtitle-window[data-collapsed="true"] .collapsed-drag-region {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 16px;
+  min-height: 28px;
+  cursor: move;
+}
+
+.subtitle-window[data-collapsed="true"] .block-phrases {
+  padding-top: 0;
+}
+
+.subtitle-window[data-collapsed="true"] .block-title[data-tauri-drag-region] {
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .phrase-list {
