@@ -55,12 +55,32 @@ app.innerHTML = `
       <button class="resize-handle north-west" data-direction="NorthWest" aria-label="向左上拉伸"></button>
       <button class="resize-handle south-east" data-direction="SouthEast" aria-label="向右下拉伸"></button>
       <button class="resize-handle south-west" data-direction="SouthWest" aria-label="向左下拉伸"></button>
-      <div class="status-row" data-tauri-drag-region>
-        <div class="drag-meta" data-tauri-drag-region>
-          <span class="drag-pill"></span>
-          <span class="status-label">字幕助手</span>
+
+      <div class="status-row">
+        <div class="status-meta" data-tauri-drag-region>
+          <div class="drag-meta" data-tauri-drag-region>
+            <span class="drag-pill"></span>
+            <span class="status-label">字幕助手</span>
+          </div>
+          <span id="statusText" class="status-text" data-state="idle">等待手动解析。</span>
         </div>
-        <span id="statusText" class="status-text" data-state="idle">等待手动解析。</span>
+        <div class="action-row">
+          <button id="editOcrButton" class="action-button" type="button">
+            编辑 OCR 区域
+          </button>
+          <button id="analyzeButton" class="action-button action-button-primary" type="button">
+            解析当前字幕
+          </button>
+          <button
+            id="hideButton"
+            class="action-button action-button-icon"
+            type="button"
+            aria-label="隐藏窗口"
+            title="隐藏窗口"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <section class="block">
@@ -91,6 +111,10 @@ function requireElement<T extends HTMLElement>(selector: string): T {
 }
 
 const statusText = requireElement<HTMLParagraphElement>("#statusText");
+const statusMeta = requireElement<HTMLDivElement>(".status-meta");
+const editOcrButton = requireElement<HTMLButtonElement>("#editOcrButton");
+const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
+const hideButton = requireElement<HTMLButtonElement>("#hideButton");
 const sourceText = requireElement<HTMLElement>("#sourceText");
 const translationText = requireElement<HTMLParagraphElement>("#translationText");
 const phrasesList = requireElement<HTMLDivElement>("#phrasesList");
@@ -111,6 +135,14 @@ async function init() {
 }
 
 function bindUi() {
+  statusMeta.addEventListener("pointerdown", async (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    await appWindow.startDragging();
+  });
+
   resizeHandles.forEach((handle) => {
     handle.addEventListener("pointerdown", async (event) => {
       if (event.button !== 0) {
@@ -120,6 +152,18 @@ function bindUi() {
       const direction = handle.dataset.direction as ResizeDirection;
       await appWindow.startResizeDragging(direction);
     });
+  });
+
+  analyzeButton.addEventListener("click", () => {
+    void analyzeCurrentSubtitle();
+  });
+
+  editOcrButton.addEventListener("click", () => {
+    void invoke("show_ocr_region");
+  });
+
+  hideButton.addEventListener("click", () => {
+    void hideWindow();
   });
 }
 
@@ -156,6 +200,7 @@ function renderStatus() {
   if (!status) {
     statusText.textContent = "等待手动解析。";
     statusText.dataset.state = "idle";
+    syncActionButtons();
     return;
   }
 
@@ -166,6 +211,7 @@ function renderStatus() {
     : status.analyzing
       ? "running"
       : "idle";
+  syncActionButtons();
 }
 
 function renderPhrases(phrases: SubtitlePhrase[]) {
@@ -186,11 +232,38 @@ function renderPhrases(phrases: SubtitlePhrase[]) {
 }
 
 function toggleEmptyState(empty: boolean) {
-  [sourceText, translationText, phrasesList].forEach(
-    (element) => {
-      element.classList.toggle("empty", empty);
-    },
-  );
+  [sourceText, translationText, phrasesList].forEach((element) => {
+    element.classList.toggle("empty", empty);
+  });
+}
+
+function syncActionButtons() {
+  const analyzing = Boolean(status?.analyzing);
+  analyzeButton.disabled = analyzing;
+  analyzeButton.textContent = analyzing ? "解析中..." : "解析当前字幕";
+}
+
+async function analyzeCurrentSubtitle() {
+  analyzeButton.disabled = true;
+  analyzeButton.textContent = "解析中...";
+
+  try {
+    await invoke("analyze_current_subtitle");
+  } catch (error) {
+    statusText.textContent = `解析失败：${String(error)}`;
+    statusText.dataset.state = "error";
+  } finally {
+    syncActionButtons();
+  }
+}
+
+async function hideWindow() {
+  try {
+    await appWindow.hide();
+  } catch (error) {
+    statusText.textContent = `隐藏失败：${String(error)}`;
+    statusText.dataset.state = "error";
+  }
 }
 
 function escapeHtml(value: string) {

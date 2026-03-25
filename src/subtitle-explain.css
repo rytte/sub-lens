@@ -129,12 +129,19 @@ button {
 
 .status-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  min-height: 26px;
+  min-height: 40px;
   padding: 2px 4px 6px;
+}
+
+.status-meta {
+  min-width: 0;
+  flex: 1;
   cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .drag-meta {
@@ -158,10 +165,64 @@ button {
 }
 
 .status-text {
-  max-width: 220px;
+  display: block;
+  max-width: 240px;
+  margin-top: 4px;
   color: rgba(255, 255, 255, 0.76);
   font-size: 11px;
-  text-align: right;
+  line-height: 1.45;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.action-button {
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.action-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.action-button:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+
+.action-button-primary {
+  background: rgba(96, 162, 255, 0.18);
+  border-color: rgba(124, 178, 255, 0.32);
+}
+
+.action-button-primary:hover {
+  background: rgba(96, 162, 255, 0.24);
+  border-color: rgba(148, 194, 255, 0.42);
+}
+
+.action-button-icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .status-text[data-state="running"] {
@@ -196,6 +257,7 @@ button {
 }
 
 .text-block {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   font-size: 15px;
   font-weight: 650;
   line-height: 1.42;

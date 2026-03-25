@@ -117,20 +117,6 @@ app.innerHTML = `
       </label>
     </section>
 
-    <section class="settings-card section-grid">
-      <div class="section-head">
-        <div>
-          <h2>快捷入口</h2>
-          <p>先调整 OCR 区域，再手动解析当前帧；解释结果会进入独立窗口。</p>
-        </div>
-      </div>
-      <div class="summary-grid">
-        <button id="editRegionButton" class="ghost-button summary-button" type="button">编辑 OCR 区域</button>
-        <button id="showExplainButton" class="ghost-button summary-button" type="button">打开解释窗口</button>
-        <button id="analyzeButton" class="primary-button summary-button" type="button">解析当前字幕</button>
-      </div>
-    </section>
-
     <footer class="footer-bar">
       <div id="statusText" class="status-text" data-tone="idle">已加载设置。</div>
       <div class="action-row">
@@ -166,9 +152,6 @@ const statusText = requireElement<HTMLDivElement>("#statusText");
 const saveButton = requireElement<HTMLButtonElement>("#saveButton");
 const resetButton = requireElement<HTMLButtonElement>("#resetButton");
 const closeButton = requireElement<HTMLButtonElement>("#closeButton");
-const editRegionButton = requireElement<HTMLButtonElement>("#editRegionButton");
-const showExplainButton = requireElement<HTMLButtonElement>("#showExplainButton");
-const analyzeButton = requireElement<HTMLButtonElement>("#analyzeButton");
 
 let currentSettings: SubtitleExplainSettings | null = null;
 let isSaving = false;
@@ -197,18 +180,6 @@ function bindUi() {
 
   closeButton.addEventListener("click", () => {
     void dismissWindow();
-  });
-
-  editRegionButton.addEventListener("click", () => {
-    void invoke("show_ocr_region");
-  });
-
-  showExplainButton.addEventListener("click", () => {
-    void invoke("open_subtitle_explain");
-  });
-
-  analyzeButton.addEventListener("click", () => {
-    void analyzeCurrentSubtitle();
   });
 
   window.addEventListener("keydown", (event) => {
@@ -324,19 +295,6 @@ async function resetSettings() {
     setStatus("已恢复默认配置。", "success");
   } catch (error) {
     setStatus(`恢复失败：${String(error)}`, "error");
-  }
-}
-
-async function analyzeCurrentSubtitle() {
-  try {
-    analyzeButton.disabled = true;
-    setStatus("正在解析当前字幕...", "idle");
-    await invoke("analyze_current_subtitle");
-    setStatus("解析任务已提交，结果会显示在解释窗口。", "success");
-  } catch (error) {
-    setStatus(`解析失败：${String(error)}`, "error");
-  } finally {
-    analyzeButton.disabled = false;
   }
 }
 

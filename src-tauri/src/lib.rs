@@ -1360,7 +1360,6 @@ fn build_overlay_menu(
     app: &AppHandle,
     overlay: &OverlayStatePayload,
 ) -> Result<Menu<tauri::Wry>, tauri::Error> {
-    let subtitle_settings = load_saved_subtitle_settings(app);
     let visibility = MenuItem::with_id(
         app,
         MENU_TOGGLE_VISIBLE,
@@ -1409,28 +1408,10 @@ fn build_overlay_menu(
     )?;
     let reset_position =
         MenuItem::with_id(app, MENU_RESET_POSITION, "重置位置", true, None::<&str>)?;
-    let edit_ocr_region = MenuItem::with_id(
-        app,
-        MENU_EDIT_OCR_REGION,
-        "编辑 OCR 区域",
-        true,
-        Some(SUBTITLE_SHORTCUT_EDIT_REGION),
-    )?;
-    let analyze_current_subtitle = MenuItem::with_id(
-        app,
-        MENU_ANALYZE_CURRENT_SUBTITLE,
-        if subtitle_settings.enabled {
-            "解析当前字幕"
-        } else {
-            "解析当前字幕（需先启用）"
-        },
-        true,
-        Some(SUBTITLE_SHORTCUT_ANALYZE),
-    )?;
     let show_subtitle_explain = MenuItem::with_id(
         app,
         MENU_SHOW_SUBTITLE_EXPLAIN,
-        "打开解释窗口",
+        "打开字幕助手",
         true,
         None::<&str>,
     )?;
@@ -1647,14 +1628,12 @@ fn build_overlay_menu(
     let separator_c = PredefinedMenuItem::separator(app)?;
     let separator_d = PredefinedMenuItem::separator(app)?;
 
-    let items: [&dyn IsMenuItem<tauri::Wry>; 18] = [
+    let items: [&dyn IsMenuItem<tauri::Wry>; 16] = [
         &visibility,
-        &analyze_current_subtitle,
-        &edit_ocr_region,
-        &show_subtitle_explain,
         &lock,
         &click_through,
         &auto_center,
+        &show_subtitle_explain,
         &separator_a,
         &appearance_menu,
         &refresh_rate_menu,
