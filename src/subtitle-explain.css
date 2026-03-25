@@ -306,6 +306,8 @@ button {
 
 .content-stack {
   display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 8px;
   min-height: 0;
   overflow-y: auto;

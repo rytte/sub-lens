@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import ssl
 import tempfile
 import sys
 import time
@@ -61,6 +63,8 @@ def build_system_prompt(explain_mode: str) -> str:
 
 ocr_instance = None
 OCR_SCORE_THRESHOLD = float(os.environ.get("SUB_LENS_OCR_SCORE_THRESHOLD", "0.20"))
+HTTP_RETRY_COUNT = max(0, int(os.environ.get("SUB_LENS_HTTP_RETRY_COUNT", "2")))
+HTTP_RETRY_DELAY_MS = max(0, int(os.environ.get("SUB_LENS_HTTP_RETRY_DELAY_MS", "400")))
 
 
 def configure_stdio() -> None:
@@ -232,9 +236,39 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dic
         method="POST",
     )
 
-    with urllib.request.urlopen(request, timeout=120) as response:
-        body = response.read().decode("utf-8", errors="replace")
-        return parse_json_text(body, "接口响应")
+    for attempt in range(HTTP_RETRY_COUNT + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                return parse_json_text(body, "接口响应")
+        except urllib.error.HTTPError:
+            raise
+        except Exception as exc:
+            if attempt >= HTTP_RETRY_COUNT or not should_retry_network_error(exc):
+                raise RuntimeError(f"{url} 请求失败：{exc}") from exc
+            time.sleep((HTTP_RETRY_DELAY_MS / 1000) * (attempt + 1))
+
+    raise RuntimeError(f"{url} 请求失败：已超过最大重试次数。")
+
+
+def should_retry_network_error(exc: BaseException) -> bool:
+    if isinstance(exc, (socket.timeout, TimeoutError, ConnectionResetError, ssl.SSLError)):
+        return True
+
+    if isinstance(exc, urllib.error.URLError):
+        return should_retry_network_error(exc.reason)
+
+    message = str(exc)
+    return any(
+        token in message
+        for token in (
+            "UNEXPECTED_EOF_WHILE_READING",
+            "EOF occurred in violation of protocol",
+            "timed out",
+            "Connection reset",
+            "Remote end closed connection",
+        )
+    )
 
 
 def ensure_ocr():

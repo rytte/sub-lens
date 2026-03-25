@@ -1937,7 +1937,11 @@ fn start_realtime_subtitle_loop(app: AppHandle) {
 
             if !settings.realtime_enabled {
                 tracker.reset_all();
-                let _ = set_subtitle_status(&app, false, "idle", "等待手动解析。", None);
+                if let Ok(status) = current_subtitle_status(&app) {
+                    if status.stage.starts_with("realtime") {
+                        let _ = set_subtitle_status(&app, false, "idle", "等待手动解析。", None);
+                    }
+                }
                 thread::sleep(Duration::from_millis(interval_ms));
                 continue;
             }

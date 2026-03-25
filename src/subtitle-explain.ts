@@ -768,9 +768,16 @@ function syncRealtimeToggleButton() {
   realtimeToggleButton.title = realtimeEnabled ? "点击关闭实时解析" : "点击开启实时解析";
 }
 
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 async function analyzeCurrentSubtitle() {
   analyzeButton.disabled = true;
   analyzeButton.textContent = "解析中...";
+  await waitForNextPaint();
 
   try {
     await invoke("analyze_current_subtitle");
