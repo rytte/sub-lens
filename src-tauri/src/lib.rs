@@ -1,18 +1,25 @@
+mod ocr;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::{
     imageops::{resize, FilterType},
     DynamicImage, ImageFormat,
 };
+use ocr::{
+    inspect_engines, recognize_text, sanitize_ocr_settings, tesseract_langs, OcrEngine,
+    OcrEngineAvailabilityPayload, OcrLanguage, OcrSettingsPayload,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Cursor, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
-    sync::Mutex,
+    sync::{mpsc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -35,6 +42,7 @@ use xcap::Monitor;
 const EVENT_STATE_CHANGED: &str = "overlay://state";
 const EVENT_PIXEL_FRAME: &str = "overlay://pixel-frame";
 const EVENT_OCR_REGION_STATE_CHANGED: &str = "ocr-region://state";
+const EVENT_OCR_RUNTIME_REQUEST: &str = "ocr-runtime://request";
 const EVENT_SUBTITLE_STATUS_CHANGED: &str = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED: &str = "subtitle://result";
 const STORE_PATH: &str = "overlay-settings.json";
@@ -45,6 +53,7 @@ const STORE_KEY_SUBTITLE_EXPLAIN_WINDOW: &str = "subtitleExplainWindow";
 const TRAY_ID: &str = "overlay-tray";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
 const OCR_REGION_WINDOW_LABEL: &str = "ocr-region";
+const OCR_RUNTIME_WINDOW_LABEL: &str = "ocr-runtime";
 const SUBTITLE_EXPLAIN_WINDOW_LABEL: &str = "subtitle-explain";
 const DEFAULT_WIDTH: f64 = 720.0;
 const DEFAULT_HEIGHT: f64 = 132.0;
@@ -60,6 +69,8 @@ const MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH: f64 = 440.0;
 const MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT: f64 = 300.0;
 const CTRL_HIDE_POLL_INTERVAL_MS: u64 = 16;
 const OCR_CAPTURE_SETTLE_MS: u64 = 320;
+const OCR_RUNTIME_READY_TIMEOUT_MS: u64 = 10_000;
+const OCR_RUNTIME_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
 const SUBTITLE_SHORTCUT_ANALYZE: &str = "Ctrl+Shift+J";
 const SUBTITLE_SHORTCUT_EDIT_REGION: &str = "Ctrl+Shift+E";
@@ -203,6 +214,7 @@ struct SubtitleExplainSettingsPayload {
     api_key: String,
     model: String,
     provider_profiles: SubtitleProviderProfilesPayload,
+    ocr_settings: OcrSettingsPayload,
     ocr_interval_ms: u32,
     stable_frames: u32,
     similarity_threshold: f64,
@@ -283,6 +295,23 @@ struct OcrSubtitleResultPayload {
     source_text: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrRuntimeRequestPayload {
+    request_id: String,
+    engine: OcrEngine,
+    language: OcrLanguage,
+    image_data_url: String,
+    tesseract: OcrRuntimeTesseractPayload,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrRuntimeTesseractPayload {
+    languages: Vec<String>,
+    page_seg_mode: u8,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SidecarResponse<T> {
@@ -346,6 +375,7 @@ impl Default for SubtitleExplainSettingsPayload {
             provider,
             explain_mode: SubtitleExplainMode::default(),
             provider_profiles,
+            ocr_settings: OcrSettingsPayload::default(),
             ocr_interval_ms: 300,
             stable_frames: 2,
             similarity_threshold: 0.88,
@@ -476,6 +506,15 @@ impl Drop for PythonSidecarProcess {
 }
 
 struct SidecarState(Mutex<Option<PythonSidecarProcess>>);
+
+#[derive(Default)]
+struct OcrRuntimeShared {
+    ready: bool,
+    next_request_id: u64,
+    pending: HashMap<String, mpsc::Sender<Result<String, String>>>,
+}
+
+struct OcrRuntimeState(Mutex<OcrRuntimeShared>);
 
 fn current_timestamp_ms() -> u128 {
     SystemTime::now()
@@ -692,6 +731,7 @@ fn sanitize_subtitle_settings(
     mut settings: SubtitleExplainSettingsPayload,
 ) -> SubtitleExplainSettingsPayload {
     settings.provider_profiles = sanitize_provider_profiles(settings.provider_profiles);
+    settings.ocr_settings = sanitize_ocr_settings(settings.ocr_settings);
     let active_profile = sanitize_provider_connection_settings(
         ProviderConnectionSettingsPayload {
             base_url: settings.base_url,
@@ -721,12 +761,16 @@ fn sanitize_ocr_region_state(mut state: OcrRegionStatePayload) -> OcrRegionState
 fn sanitize_subtitle_explain_window_state(
     mut state: SubtitleExplainWindowStatePayload,
 ) -> SubtitleExplainWindowStatePayload {
-    state.width = state
-        .width
-        .max(MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH);
-    state.height = state
-        .height
-        .max(MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT);
+    state.width = state.width.max(MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH);
+    state.height = state.height.max(MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT);
+    if matches!(state.x, Some(x) if x.abs() < 0.5)
+        && matches!(state.y, Some(y) if y.abs() < 0.5)
+        && (state.width - DEFAULT_SUBTITLE_EXPLAIN_WINDOW_WIDTH).abs() < 1.0
+        && (state.height - DEFAULT_SUBTITLE_EXPLAIN_WINDOW_HEIGHT).abs() < 1.0
+    {
+        state.x = None;
+        state.y = None;
+    }
     state
 }
 
@@ -785,9 +829,7 @@ fn load_saved_subtitle_settings(app: &AppHandle) -> SubtitleExplainSettingsPaylo
     sanitize_subtitle_settings(settings)
 }
 
-fn load_saved_subtitle_explain_window_state(
-    app: &AppHandle,
-) -> SubtitleExplainWindowStatePayload {
+fn load_saved_subtitle_explain_window_state(app: &AppHandle) -> SubtitleExplainWindowStatePayload {
     let store = match app.store(STORE_PATH) {
         Ok(store) => store,
         Err(_) => return SubtitleExplainWindowStatePayload::default(),
@@ -795,9 +837,7 @@ fn load_saved_subtitle_explain_window_state(
 
     let state = store
         .get(STORE_KEY_SUBTITLE_EXPLAIN_WINDOW)
-        .and_then(|value| {
-            serde_json::from_value::<SubtitleExplainWindowStatePayload>(value).ok()
-        })
+        .and_then(|value| serde_json::from_value::<SubtitleExplainWindowStatePayload>(value).ok())
         .unwrap_or_default();
 
     store.close_resource();
@@ -909,19 +949,20 @@ fn sync_subtitle_explain_window_state_from_window(
     app: &AppHandle,
     visible_override: Option<bool>,
 ) -> Result<SubtitleExplainWindowStatePayload, String> {
-    let window_geometry = if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
-        let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
-        let size = window.inner_size().map_err(|err| err.to_string())?;
-        let position = window.outer_position().map_err(|err| err.to_string())?;
-        Some((
-            f64::from(size.width) / scale_factor,
-            f64::from(size.height) / scale_factor,
-            f64::from(position.x) / scale_factor,
-            f64::from(position.y) / scale_factor,
-        ))
-    } else {
-        None
-    };
+    let window_geometry =
+        if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+            let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
+            let size = window.inner_size().map_err(|err| err.to_string())?;
+            let position = window.outer_position().map_err(|err| err.to_string())?;
+            Some((
+                f64::from(size.width) / scale_factor,
+                f64::from(size.height) / scale_factor,
+                f64::from(position.x) / scale_factor,
+                f64::from(position.y) / scale_factor,
+            ))
+        } else {
+            None
+        };
 
     let next_state = {
         let state = app.state::<AppState>();
@@ -935,9 +976,8 @@ fn sync_subtitle_explain_window_state_from_window(
         if let Some(visible) = visible_override {
             shared.subtitle_explain_window.visible = visible;
         }
-        shared.subtitle_explain_window = sanitize_subtitle_explain_window_state(
-            shared.subtitle_explain_window.clone(),
-        );
+        shared.subtitle_explain_window =
+            sanitize_subtitle_explain_window_state(shared.subtitle_explain_window.clone());
         shared.subtitle_explain_window.clone()
     };
 
@@ -1154,6 +1194,7 @@ fn ensure_ocr_region_window(app: &AppHandle) -> Result<tauri::WebviewWindow, Str
     .always_on_top(true)
     .skip_taskbar(true)
     .shadow(false)
+    .center()
     .visible(false)
     .build()
     .map_err(|err| err.to_string())?;
@@ -1176,25 +1217,51 @@ fn ensure_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
         return Ok(window);
     }
 
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("pages/overlay.html".into()))
-        .title("字幕遮挡")
-        .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-        .resizable(true)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .center()
-        .visible(false)
-        .build()
-        .map_err(|err| err.to_string())?;
+    let window =
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::App("pages/overlay.html".into()))
+            .title("字幕遮挡")
+            .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+            .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .center()
+            .visible(false)
+            .build()
+            .map_err(|err| err.to_string())?;
 
     disable_window_transitions(&window)?;
     window
         .set_min_size(Some(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT)))
         .map_err(|err| err.to_string())?;
+    Ok(window)
+}
+
+fn ensure_ocr_runtime_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(OCR_RUNTIME_WINDOW_LABEL) {
+        return Ok(window);
+    }
+
+    let window = WebviewWindowBuilder::new(
+        app,
+        OCR_RUNTIME_WINDOW_LABEL,
+        WebviewUrl::App("pages/ocr-runtime.html".into()),
+    )
+    .title("OCR Runtime")
+    .inner_size(1.0, 1.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .skip_taskbar(true)
+    .shadow(false)
+    .visible(false)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    disable_window_transitions(&window)?;
     Ok(window)
 }
 
@@ -1229,6 +1296,7 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
     .always_on_top(true)
     .skip_taskbar(true)
     .shadow(false)
+    .center()
     .visible(false)
     .build()
     .map_err(|err| err.to_string())?;
@@ -1258,6 +1326,8 @@ fn apply_subtitle_explain_window_state(
         window
             .set_position(LogicalPosition::new(x, y))
             .map_err(|err| err.to_string())?;
+    } else {
+        window.center().map_err(|err| err.to_string())?;
     }
 
     if state.visible {
@@ -1604,13 +1674,23 @@ fn toggle_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, St
 }
 
 fn open_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+
+        if window.is_visible().map_err(|err| err.to_string())? {
+            let _ = sync_subtitle_explain_window_state_from_window(app, Some(true));
+            window.show().map_err(|err| err.to_string())?;
+            window.set_focus().map_err(|err| err.to_string())?;
+            return Ok(());
+        }
+    }
+
     let state = {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
         shared.subtitle_explain_window.visible = true;
-        let next_state = sanitize_subtitle_explain_window_state(
-            shared.subtitle_explain_window.clone(),
-        );
+        let next_state =
+            sanitize_subtitle_explain_window_state(shared.subtitle_explain_window.clone());
         shared.subtitle_explain_window = next_state.clone();
         next_state
     };
@@ -1836,6 +1916,118 @@ where
         .ok_or_else(|| "sidecar 缺少 result 字段".to_string())
 }
 
+fn image_path_to_data_url(image_path: &Path) -> Result<String, String> {
+    let bytes = fs::read(image_path).map_err(|err| err.to_string())?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
+}
+
+fn wait_for_ocr_runtime_ready(app: &AppHandle) -> Result<(), String> {
+    ensure_ocr_runtime_window(app)?;
+
+    let start = Instant::now();
+    loop {
+        let ready = {
+            let state = app.state::<OcrRuntimeState>();
+            let shared = state.0.lock().map_err(|err| err.to_string())?;
+            shared.ready
+        };
+
+        if ready {
+            return Ok(());
+        }
+
+        if start.elapsed() >= Duration::from_millis(OCR_RUNTIME_READY_TIMEOUT_MS) {
+            return Err("OCR runtime 初始化超时，请稍后重试。".into());
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn remove_pending_ocr_runtime_request(app: &AppHandle, request_id: &str) -> Result<(), String> {
+    let state = app.state::<OcrRuntimeState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    shared.pending.remove(request_id);
+    Ok(())
+}
+
+fn run_tesseract_js_ocr(
+    app: &AppHandle,
+    image_path: &Path,
+    settings: &OcrSettingsPayload,
+) -> Result<String, String> {
+    wait_for_ocr_runtime_ready(app)?;
+
+    let request_id = {
+        let state = app.state::<OcrRuntimeState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.next_request_id = shared.next_request_id.saturating_add(1);
+        format!("ocr-runtime-{}", shared.next_request_id)
+    };
+
+    let image_data_url = image_path_to_data_url(image_path)?;
+    let runtime_window = ensure_ocr_runtime_window(app)?;
+    let (sender, receiver) = mpsc::channel();
+
+    {
+        let state = app.state::<OcrRuntimeState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.pending.insert(request_id.clone(), sender);
+    }
+
+    let payload = OcrRuntimeRequestPayload {
+        request_id: request_id.clone(),
+        engine: OcrEngine::Tesseract,
+        language: settings.language,
+        image_data_url,
+        tesseract: OcrRuntimeTesseractPayload {
+            languages: tesseract_langs(&settings.language)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            page_seg_mode: settings.profiles.tesseract.page_seg_mode,
+        },
+    };
+
+    if let Err(err) = runtime_window.emit(EVENT_OCR_RUNTIME_REQUEST, payload) {
+        let _ = remove_pending_ocr_runtime_request(app, &request_id);
+        return Err(err.to_string());
+    }
+
+    match receiver.recv_timeout(Duration::from_millis(OCR_RUNTIME_REQUEST_TIMEOUT_MS)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = remove_pending_ocr_runtime_request(app, &request_id);
+            Err("Tesseract.js 识别超时，请稍后重试或切换 OCR 引擎。".into())
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = remove_pending_ocr_runtime_request(app, &request_id);
+            Err("OCR runtime 连接已断开，请重试。".into())
+        }
+    }
+}
+
+fn submit_ocr_runtime_response(
+    app: &AppHandle,
+    request_id: &str,
+    response: Result<String, String>,
+) -> Result<(), String> {
+    let sender = {
+        let state = app.state::<OcrRuntimeState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.pending.remove(request_id)
+    };
+
+    if let Some(sender) = sender {
+        let _ = sender.send(response);
+    }
+
+    Ok(())
+}
+
 fn timestamp_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1847,7 +2039,7 @@ fn temp_capture_path() -> PathBuf {
     std::env::temp_dir().join(format!("sub-lens-capture-{}.png", timestamp_millis()))
 }
 
-fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
+fn capture_ocr_region_image(app: &AppHandle, engine: OcrEngine) -> Result<PathBuf, String> {
     let region = current_ocr_region_state(app)?;
     let window = ensure_ocr_region_window(app)?;
 
@@ -1874,7 +2066,7 @@ fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
         let image = monitor
             .capture_region(capture_x, capture_y, capture_width, capture_height)
             .map_err(|err| err.to_string())?;
-        let processed = preprocess_ocr_image(image);
+        let processed = preprocess_ocr_image(image, engine);
         let path = temp_capture_path();
         DynamicImage::ImageRgba8(processed)
             .save(&path)
@@ -1893,9 +2085,38 @@ fn capture_ocr_region_image(app: &AppHandle) -> Result<PathBuf, String> {
     result
 }
 
-fn preprocess_ocr_image(image: image::RgbaImage) -> image::RgbaImage {
+fn preprocess_ocr_image(image: image::RgbaImage, engine: OcrEngine) -> image::RgbaImage {
+    match engine {
+        OcrEngine::WindowsOcr => preprocess_windows_ocr_image(image),
+        OcrEngine::Tesseract | OcrEngine::PaddleOcr => preprocess_default_ocr_image(image),
+    }
+}
+
+fn preprocess_default_ocr_image(image: image::RgbaImage) -> image::RgbaImage {
     let grayscale = DynamicImage::ImageRgba8(image).grayscale();
     grayscale.adjust_contrast(24.0).to_rgba8()
+}
+
+fn preprocess_windows_ocr_image(image: image::RgbaImage) -> image::RgbaImage {
+    let source = DynamicImage::ImageRgba8(image);
+    let width = source.width().max(1);
+    let height = source.height().max(1);
+
+    // Windows OCR 对小字比较敏感，字幕场景先放大再识别更稳。
+    let scale = if height < 180 { 3 } else { 2 };
+    let target_width = width.saturating_mul(scale);
+    let target_height = height.saturating_mul(scale);
+    let resized = resize(
+        &source.to_rgba8(),
+        target_width,
+        target_height,
+        FilterType::CatmullRom,
+    );
+
+    DynamicImage::ImageRgba8(resized)
+        .adjust_contrast(8.0)
+        .brighten(6)
+        .to_rgba8()
 }
 
 #[derive(Debug, Default)]
@@ -1959,9 +2180,9 @@ fn subtitle_similarity(left: &str, right: &str) -> f64 {
     1.0 - distance as f64 / max_len as f64
 }
 
-fn run_subtitle_ocr_on_image(
+fn run_paddle_ocr_on_image(
     app: &AppHandle,
-    image_path: &PathBuf,
+    image_path: &Path,
     allow_empty: bool,
 ) -> Result<String, String> {
     let image_path_string = image_path.to_string_lossy().to_string();
@@ -1993,9 +2214,22 @@ fn explain_subtitle_text(
     with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request)
 }
 
-fn capture_subtitle_source_text(app: &AppHandle, allow_empty: bool) -> Result<String, String> {
-    let image_path = capture_ocr_region_image(app)?;
-    let result = run_subtitle_ocr_on_image(app, &image_path, allow_empty);
+fn capture_subtitle_source_text(
+    app: &AppHandle,
+    settings: &SubtitleExplainSettingsPayload,
+    allow_empty: bool,
+) -> Result<String, String> {
+    let image_path = capture_ocr_region_image(app, settings.ocr_settings.engine)?;
+    let result = recognize_text(
+        &image_path,
+        allow_empty,
+        &settings.ocr_settings,
+        |engine, image_path, allow_empty| match engine {
+            OcrEngine::Tesseract => run_tesseract_js_ocr(app, image_path, &settings.ocr_settings),
+            OcrEngine::PaddleOcr => run_paddle_ocr_on_image(app, image_path, allow_empty),
+            OcrEngine::WindowsOcr => Err("当前 OCR 引擎不应走 JS/sidecar 分支。".into()),
+        },
+    );
     let _ = fs::remove_file(&image_path);
     result
 }
@@ -2037,7 +2271,7 @@ fn run_realtime_subtitle_iteration(
     settings: &SubtitleExplainSettingsPayload,
     tracker: &mut RealtimeSubtitleTracker,
 ) -> Result<(), String> {
-    let source_text = capture_subtitle_source_text(app, true)?;
+    let source_text = capture_subtitle_source_text(app, settings, true)?;
     if source_text.is_empty() {
         return handle_realtime_blank(app, settings, tracker);
     }
@@ -2144,7 +2378,7 @@ fn run_subtitle_analysis_blocking(
         set_subtitle_status(app, true, "capture", "正在抓取 OCR 区域并识别文本...", None)?;
     }
 
-    let source_text = match capture_subtitle_source_text(app, false) {
+    let source_text = match capture_subtitle_source_text(app, &settings, false) {
         Ok(source_text) => source_text,
         Err(err) => {
             let _ = set_subtitle_status(app, false, "error", "获取字幕失败。", Some(err.clone()));
@@ -2300,16 +2534,6 @@ fn build_overlay_menu(
     )?;
     let reset_position =
         MenuItem::with_id(app, MENU_RESET_POSITION, "重置位置", true, None::<&str>)?;
-    let show_subtitle_explain = MenuItem::with_id(
-        app,
-        MENU_SHOW_SUBTITLE_EXPLAIN,
-        "打开字幕助手",
-        true,
-        None::<&str>,
-    )?;
-    let more_settings =
-        MenuItem::with_id(app, MENU_OPEN_MORE_SETTINGS, "更多设置", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
     let always_on_top = CheckMenuItem::with_id(
         app,
         MENU_TOGGLE_ON_TOP,
@@ -2521,7 +2745,6 @@ fn build_overlay_menu(
 
     let separator_a = PredefinedMenuItem::separator(app)?;
     let separator_b = PredefinedMenuItem::separator(app)?;
-    let separator_c = PredefinedMenuItem::separator(app)?;
     let _separator_d = PredefinedMenuItem::separator(app)?;
 
     let items: [&dyn IsMenuItem<tauri::Wry>; 13] = [
@@ -2550,7 +2773,11 @@ fn build_tray_menu(
     let visibility = MenuItem::with_id(
         app,
         MENU_TOGGLE_VISIBLE,
-        if overlay.visible { "隐藏遮挡条" } else { "显示遮挡条" },
+        if overlay.visible {
+            "隐藏遮挡条"
+        } else {
+            "显示遮挡条"
+        },
         true,
         Some("Ctrl+Alt+H"),
     )?;
@@ -2565,8 +2792,13 @@ fn build_tray_menu(
         true,
         Some("Ctrl+Alt+Space"),
     )?;
-    let reset_position =
-        MenuItem::with_id(app, MENU_RESET_POSITION, "重置遮挡条位置", true, None::<&str>)?;
+    let reset_position = MenuItem::with_id(
+        app,
+        MENU_RESET_POSITION,
+        "重置遮挡条位置",
+        true,
+        None::<&str>,
+    )?;
     let show_subtitle_explain = MenuItem::with_id(
         app,
         MENU_SHOW_SUBTITLE_EXPLAIN,
@@ -2769,6 +3001,40 @@ fn reset_subtitle_explain_settings(
     let settings = save_runtime_subtitle_settings(&app, SubtitleExplainSettingsPayload::default())?;
     refresh_tray_menu(&app, &current_overlay_state(&app)?)?;
     Ok(settings)
+}
+
+#[tauri::command]
+fn inspect_ocr_engines(
+    ocr_settings: OcrSettingsPayload,
+) -> Result<Vec<OcrEngineAvailabilityPayload>, String> {
+    let ocr_settings = sanitize_ocr_settings(ocr_settings);
+    Ok(inspect_engines(&ocr_settings))
+}
+
+#[tauri::command]
+fn notify_ocr_runtime_ready(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<OcrRuntimeState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    shared.ready = true;
+    Ok(())
+}
+
+#[tauri::command]
+fn submit_ocr_runtime_result(
+    app: AppHandle,
+    request_id: String,
+    text: String,
+) -> Result<(), String> {
+    submit_ocr_runtime_response(&app, &request_id, Ok(text))
+}
+
+#[tauri::command]
+fn submit_ocr_runtime_error(
+    app: AppHandle,
+    request_id: String,
+    error: String,
+) -> Result<(), String> {
+    submit_ocr_runtime_response(&app, &request_id, Err(error))
 }
 
 #[tauri::command]
@@ -3104,8 +3370,7 @@ pub fn run() {
             let overlay = load_saved_state(app.handle());
             let ocr_region = load_saved_ocr_region(app.handle());
             let subtitle_settings = load_saved_subtitle_settings(app.handle());
-            let subtitle_explain_window =
-                load_saved_subtitle_explain_window_state(app.handle());
+            let subtitle_explain_window = load_saved_subtitle_explain_window_state(app.handle());
             let ctrl_pressed = current_ctrl_pressed();
             app.manage(AppState(Mutex::new(SharedState::new(
                 overlay.clone(),
@@ -3115,17 +3380,15 @@ pub fn run() {
                 ctrl_pressed,
             ))));
             app.manage(SidecarState(Mutex::new(None)));
+            app.manage(OcrRuntimeState(Mutex::new(OcrRuntimeShared::default())));
 
             ensure_main_window(app.handle())?;
             ensure_ocr_region_window(app.handle())?;
+            ensure_ocr_runtime_window(app.handle())?;
             apply_window_state(app.handle(), &overlay, ctrl_pressed, true)?;
             apply_ocr_region_window_state(app.handle(), &ocr_region)?;
             if subtitle_explain_window.visible {
-                apply_subtitle_explain_window_state(
-                    app.handle(),
-                    &subtitle_explain_window,
-                    false,
-                )?;
+                apply_subtitle_explain_window_state(app.handle(), &subtitle_explain_window, false)?;
             }
             emit_state(app.handle(), &overlay)?;
             emit_ocr_region_state(app.handle(), &ocr_region)?;
@@ -3152,6 +3415,10 @@ pub fn run() {
             save_subtitle_explain_settings,
             save_subtitle_explain_mode,
             reset_subtitle_explain_settings,
+            inspect_ocr_engines,
+            notify_ocr_runtime_ready,
+            submit_ocr_runtime_result,
+            submit_ocr_runtime_error,
             fetch_available_subtitle_models,
             load_subtitle_status,
             load_latest_subtitle_result,

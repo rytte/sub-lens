@@ -4,6 +4,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { mountWindowApp } from "./main";
 import type {
+  OcrEngine,
+  OcrEngineAvailability,
+  OcrLanguage,
+  OcrSettings,
   ProviderConnectionSettings,
   StatusTone,
   SubtitleExplainMode,
@@ -13,6 +17,57 @@ import type {
 } from "./shared/types";
 
 const appWindow = getCurrentWindow();
+
+const OCR_ENGINE_OPTIONS: Array<{
+  value: OcrEngine;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "windowsOcr",
+    label: "Windows OCR",
+    description: "直接调用系统 OCR，适合 Windows 10/11 的离线识别。",
+  },
+  {
+    value: "tesseract",
+    label: "Tesseract.js",
+    description: "使用内置 WebAssembly OCR，不依赖本机安装 tesseract.exe。",
+  },
+  {
+    value: "paddleOcr",
+    label: "PaddleOCR",
+    description: "沿用现有 Python sidecar 中的 PaddleOCR 能力。",
+  },
+];
+
+const OCR_LANGUAGE_OPTIONS: Array<{
+  value: OcrLanguage;
+  label: string;
+}> = [
+  { value: "auto", label: "自动" },
+  { value: "zhCn", label: "简体中文" },
+  { value: "zhTw", label: "繁体中文" },
+  { value: "en", label: "英语" },
+  { value: "yue", label: "粤语" },
+  { value: "ja", label: "日语" },
+  { value: "ko", label: "韩语" },
+  { value: "fr", label: "法语" },
+  { value: "es", label: "西班牙语" },
+  { value: "ru", label: "俄语" },
+  { value: "de", label: "德语" },
+  { value: "it", label: "意大利语" },
+  { value: "tr", label: "土耳其语" },
+  { value: "pt", label: "葡萄牙语" },
+  { value: "ptBr", label: "巴西葡萄牙语" },
+  { value: "vi", label: "越南语" },
+  { value: "id", label: "印尼语" },
+  { value: "th", label: "泰语" },
+  { value: "ms", label: "马来语" },
+  { value: "ar", label: "阿拉伯语" },
+  { value: "hi", label: "印地语" },
+  { value: "uk", label: "乌克兰语" },
+  { value: "he", label: "希伯来语" },
+];
 
 type InlineStatus = {
   message: string;
@@ -24,6 +79,9 @@ type SettingsFormState = {
   provider: SubtitleProvider;
   explainMode: SubtitleExplainMode;
   providerProfiles: SubtitleProviderProfiles;
+  ocrEngine: OcrEngine;
+  ocrLanguage: OcrLanguage;
+  tesseractPageSegMode: string;
   ocrIntervalMs: string;
   stableFrames: string;
   similarityThreshold: string;
@@ -45,6 +103,9 @@ function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
     provider: settings.provider,
     explainMode: settings.explainMode,
     providerProfiles: cloneProfiles(settings.providerProfiles),
+    ocrEngine: settings.ocrSettings.engine,
+    ocrLanguage: settings.ocrSettings.language,
+    tesseractPageSegMode: String(settings.ocrSettings.profiles.tesseract.pageSegMode),
     ocrIntervalMs: String(settings.ocrIntervalMs),
     stableFrames: String(settings.stableFrames),
     similarityThreshold: settings.similarityThreshold.toFixed(2),
@@ -54,7 +115,6 @@ function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
 
 function readNumber(value: string, fallback: number) {
   const parsedValue = Number.parseFloat(value);
-
   return Number.isFinite(parsedValue) ? parsedValue : fallback;
 }
 
@@ -65,6 +125,32 @@ function normalizeProfile(
     baseUrl: profile.baseUrl.trim(),
     apiKey: profile.apiKey,
     model: profile.model.trim(),
+  };
+}
+
+function buildOcrSettings(
+  form: SettingsFormState,
+  fallback: OcrSettings,
+): OcrSettings {
+  return {
+    engine: form.ocrEngine,
+    language: form.ocrLanguage,
+    profiles: {
+      tesseract: {
+        pageSegMode: Math.max(
+          0,
+          Math.min(
+            13,
+            Math.round(
+              readNumber(
+                form.tesseractPageSegMode,
+                fallback.profiles.tesseract.pageSegMode,
+              ),
+            ),
+          ),
+        ),
+      },
+    },
   };
 }
 
@@ -86,6 +172,7 @@ function buildSettings(
     apiKey: activeProfile.apiKey,
     model: activeProfile.model,
     providerProfiles,
+    ocrSettings: buildOcrSettings(form, fallback.ocrSettings),
     ocrIntervalMs: readNumber(form.ocrIntervalMs, fallback.ocrIntervalMs),
     stableFrames: readNumber(form.stableFrames, fallback.stableFrames),
     similarityThreshold: readNumber(
@@ -98,18 +185,18 @@ function buildSettings(
 
 function providerHint(provider: SubtitleProvider) {
   if (provider === "openAiResponses") {
-    return "推荐填写 OpenAI 兼容地址，例如 https://api.openai.com/v1，API Key 一般必填。";
+    return "推荐填写 OpenAI 兼容地址，例如 https://api.openai.com/v1，并提供对应 API Key。";
   }
 
-  return "本地 Ollama 常用地址是 http://127.0.0.1:11434，直连场景通常可以留空 API Key。";
+  return "本地 Ollama 常见地址是 http://127.0.0.1:11434，通常可以不填 API Key。";
 }
 
 function defaultModelHint(provider: SubtitleProvider) {
   if (provider === "openAiResponses") {
-    return "可手动填写，也可以用当前 Base URL 和 API Key 拉取模型列表。";
+    return "可以手动填写模型，也可以根据当前 Base URL 和 API Key 拉取模型列表。";
   }
 
-  return "可手动填写，也可以从当前 Ollama 服务拉取已安装模型。";
+  return "可以手动填写模型，也可以从当前 Ollama 服务拉取已安装模型。";
 }
 
 function providerPlaceholders(provider: SubtitleProvider) {
@@ -142,6 +229,49 @@ function updateProviderProfile(
   } as SubtitleProviderProfiles;
 }
 
+function defaultOcrHint(engine: OcrEngine) {
+  switch (engine) {
+    case "windowsOcr":
+      return "Windows OCR 依赖系统语言包；如果识别不到目标语言，请先在系统里安装对应 OCR 语言支持。";
+    case "tesseract":
+      return "Tesseract.js 不需要本地安装可执行文件。首次使用会下载 WASM 与语言数据，自动模式默认会尝试英文、简中、日文、韩文。";
+    case "paddleOcr":
+      return "PaddleOCR 继续通过 Python sidecar 运行，适合保留现有识别链路。";
+  }
+}
+
+function formatAvailabilityMessage(
+  availability: OcrEngineAvailability | undefined,
+  fallbackMessage: string,
+): InlineStatus {
+  if (!availability) {
+    return {
+      message: fallbackMessage,
+      tone: "idle",
+    };
+  }
+
+  if (availability.available) {
+    return {
+      message: availability.reason
+        ? `${availability.label} 可用：${availability.reason}`
+        : `${availability.label} 可用。`,
+      tone: "success",
+    };
+  }
+
+  return {
+    message: availability.reason
+      ? `${availability.label} 当前不可用：${availability.reason}`
+      : `${availability.label} 当前不可用。`,
+    tone: "error",
+  };
+}
+
+function engineStatusLabel(item: OcrEngineAvailability) {
+  return `${item.label} · ${item.available ? "可用" : "未就绪"}`;
+}
+
 export function SettingsWindow() {
   const [form, setForm] = useState<SettingsFormState | null>(null);
   const [status, setStatus] = useState<InlineStatus>({
@@ -149,22 +279,66 @@ export function SettingsWindow() {
     tone: "idle",
   });
   const [modelHint, setModelHint] = useState<InlineStatus>({
-    message: "正在加载模型设置...",
+    message: "正在加载模型配置...",
+    tone: "idle",
+  });
+  const [ocrHint, setOcrHint] = useState<InlineStatus>({
+    message: "正在加载 OCR 配置...",
     tone: "idle",
   });
   const [modelSuggestions, setModelSuggestions] = useState<string[]>([]);
+  const [ocrAvailability, setOcrAvailability] = useState<OcrEngineAvailability[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [isInspectingOcr, setIsInspectingOcr] = useState(false);
   const loadedSettingsRef = useRef<SubtitleExplainSettings | null>(null);
 
   const activeProfile = form?.providerProfiles[form.provider] ?? null;
   const placeholders = providerPlaceholders(form?.provider ?? "openAiResponses");
 
+  async function inspectOcrAvailability(
+    nextForm?: SettingsFormState,
+    nextSettings?: SubtitleExplainSettings,
+  ) {
+    const effectiveForm = nextForm ?? form;
+    const effectiveSettings = nextSettings ?? loadedSettingsRef.current;
+
+    if (!effectiveForm || !effectiveSettings) {
+      return;
+    }
+
+    try {
+      setIsInspectingOcr(true);
+      setOcrHint({
+        message: "正在检测 OCR 引擎...",
+        tone: "idle",
+      });
+
+      const availability = await invoke<OcrEngineAvailability[]>("inspect_ocr_engines", {
+        ocrSettings: buildOcrSettings(effectiveForm, effectiveSettings.ocrSettings),
+      });
+
+      setOcrAvailability(availability);
+      const current = availability.find((item) => item.engine === effectiveForm.ocrEngine);
+      setOcrHint(formatAvailabilityMessage(current, defaultOcrHint(effectiveForm.ocrEngine)));
+    } catch (error) {
+      setOcrAvailability([]);
+      setOcrHint({
+        message: `检测 OCR 引擎失败：${String(error)}`,
+        tone: "error",
+      });
+    } finally {
+      setIsInspectingOcr(false);
+    }
+  }
+
   useEffect(() => {
     void invoke<SubtitleExplainSettings>("load_subtitle_explain_settings")
       .then((settings) => {
+        const nextForm = toFormState(settings);
+
         loadedSettingsRef.current = settings;
-        setForm(toFormState(settings));
+        setForm(nextForm);
         setStatus({
           message: "已加载设置。",
           tone: "idle",
@@ -173,6 +347,11 @@ export function SettingsWindow() {
           message: defaultModelHint(settings.provider),
           tone: "idle",
         });
+        setOcrHint({
+          message: defaultOcrHint(nextForm.ocrEngine),
+          tone: "idle",
+        });
+        void inspectOcrAvailability(nextForm, settings);
       })
       .catch((error) => {
         setStatus({
@@ -208,13 +387,12 @@ export function SettingsWindow() {
       const nextSettings = buildSettings(form, loadedSettingsRef.current);
       const savedSettings = await invoke<SubtitleExplainSettings>(
         "save_subtitle_explain_settings",
-        {
-          nextSettings,
-        },
+        { nextSettings },
       );
+      const nextForm = toFormState(savedSettings);
 
       loadedSettingsRef.current = savedSettings;
-      setForm(toFormState(savedSettings));
+      setForm(nextForm);
       setModelSuggestions([]);
       setModelHint({
         message: defaultModelHint(savedSettings.provider),
@@ -224,6 +402,7 @@ export function SettingsWindow() {
         message: "设置已保存。",
         tone: "success",
       });
+      void inspectOcrAvailability(nextForm, savedSettings);
     } catch (error) {
       setStatus({
         message: `保存失败：${String(error)}`,
@@ -235,7 +414,7 @@ export function SettingsWindow() {
   }
 
   async function resetSettings() {
-    if (!window.confirm("确定恢复字幕解析相关默认配置吗？")) {
+    if (!window.confirm("确定恢复字幕解析相关的默认配置吗？")) {
       return;
     }
 
@@ -248,9 +427,10 @@ export function SettingsWindow() {
       const settings = await invoke<SubtitleExplainSettings>(
         "reset_subtitle_explain_settings",
       );
+      const nextForm = toFormState(settings);
 
       loadedSettingsRef.current = settings;
-      setForm(toFormState(settings));
+      setForm(nextForm);
       setModelSuggestions([]);
       setModelHint({
         message: defaultModelHint(settings.provider),
@@ -260,6 +440,7 @@ export function SettingsWindow() {
         message: "已恢复默认配置。",
         tone: "success",
       });
+      void inspectOcrAvailability(nextForm, settings);
     } catch (error) {
       setStatus({
         message: `恢复失败：${String(error)}`,
@@ -322,7 +503,7 @@ export function SettingsWindow() {
     } catch (error) {
       setModelSuggestions([]);
       setModelHint({
-        message: `拉取失败：${String(error)}`,
+        message: `拉取模型失败：${String(error)}`,
         tone: "error",
       });
       setStatus({
@@ -348,7 +529,6 @@ export function SettingsWindow() {
     };
 
     window.addEventListener("keydown", handleKeyDown);
-
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
@@ -358,23 +538,152 @@ export function SettingsWindow() {
     <main className="settings-shell">
       <header className="hero-card">
         <div>
-          <p className="eyebrow">字幕解析与解释</p>
+          <p className="eyebrow">字幕解析与 OCR</p>
           <h1 className="hero-title">更多设置</h1>
           <p className="hero-subtitle">
-            这里集中管理新增配置项，包括 Provider、Base URL、模型、实时参数等。
+            在这里统一管理 OCR 引擎、字幕解释 Provider 和实时识别参数。
           </p>
         </div>
-        <div className="hero-tags" aria-label="方案范围">
-          <span className="tag">PP-OCRv5</span>
+        <div className="hero-tags" aria-label="能力范围">
+          <span className="tag">Windows OCR</span>
+          <span className="tag">Tesseract.js</span>
+          <span className="tag">PaddleOCR</span>
           <span className="tag">OpenAI Responses</span>
           <span className="tag">Ollama</span>
         </div>
       </header>
 
+      <section className="settings-card section-grid two-columns">
+        <div className="section-head full-span">
+          <div>
+            <h2>OCR 引擎</h2>
+          </div>
+        </div>
+        <label className="field">
+          <span className="field-label">OCR 引擎</span>
+          <select
+            className="text-input select-input"
+            value={form?.ocrEngine ?? "windowsOcr"}
+            onChange={(event) => {
+              const nextEngine = event.target.value as OcrEngine;
+
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      ocrEngine: nextEngine,
+                    }
+                  : currentForm,
+              );
+              setOcrHint({
+                message: defaultOcrHint(nextEngine),
+                tone: "idle",
+              });
+            }}
+          >
+            {OCR_ENGINE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">识别语言</span>
+          <select
+            className="text-input select-input"
+            value={form?.ocrLanguage ?? "auto"}
+            onChange={(event) => {
+              const nextLanguage = event.target.value as OcrLanguage;
+
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      ocrLanguage: nextLanguage,
+                    }
+                  : currentForm,
+              );
+            }}
+          >
+            {OCR_LANGUAGE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="field">
+          <span className="field-label">引擎说明</span>
+          <span className="field-help" data-tone={ocrHint.tone}>
+            {form
+              ? OCR_ENGINE_OPTIONS.find((option) => option.value === form.ocrEngine)?.description
+              : ""}
+          </span>
+          <span className="field-help" data-tone={ocrHint.tone}>
+            {ocrHint.message}
+          </span>
+          <div className="input-action-row">
+            <button
+              className="ghost-button inline-button"
+              type="button"
+              disabled={isInspectingOcr || !form}
+              onClick={() => {
+                void inspectOcrAvailability();
+              }}
+            >
+              {isInspectingOcr ? "检测中..." : "检测引擎"}
+            </button>
+          </div>
+          <div className="model-list" hidden={ocrAvailability.length === 0}>
+            {ocrAvailability.map((item) => (
+              <span
+                key={item.engine}
+                className="model-chip"
+                title={item.reason ?? ""}
+              >
+                {engineStatusLabel(item)}
+              </span>
+            ))}
+          </div>
+        </div>
+        {form?.ocrEngine === "tesseract" ? (
+          <label className="field">
+            <span className="field-label">PSM</span>
+            <input
+              className="text-input"
+              type="number"
+              min="0"
+              max="13"
+              step="1"
+              value={form.tesseractPageSegMode}
+              onChange={(event) => {
+                const tesseractPageSegMode = event.target.value;
+
+                setForm((currentForm) =>
+                  currentForm
+                    ? {
+                        ...currentForm,
+                        tesseractPageSegMode,
+                      }
+                    : currentForm,
+                );
+              }}
+            />
+            <span className="field-help" data-tone="idle">
+              常用值是 `6`，表示按单个统一文本块识别，适合字幕场景。
+            </span>
+          </label>
+        ) : null}
+        <p className="inline-hint full-span">
+          {form ? defaultOcrHint(form.ocrEngine) : ""}
+        </p>
+      </section>
+
       <section className="settings-card section-grid">
         <div className="section-head section-head-provider">
           <div>
-            <h2>Provider</h2>
+            <h2>字幕解释 Provider</h2>
           </div>
         </div>
         <label className="field">
@@ -385,16 +694,14 @@ export function SettingsWindow() {
             onChange={(event) => {
               const nextProvider = event.target.value as SubtitleProvider;
 
-              setForm((currentForm) => {
-                if (!currentForm) {
-                  return currentForm;
-                }
-
-                return {
-                  ...currentForm,
-                  provider: nextProvider,
-                };
-              });
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      provider: nextProvider,
+                    }
+                  : currentForm,
+              );
               setModelSuggestions([]);
               setModelHint({
                 message: defaultModelHint(nextProvider),
@@ -418,22 +725,18 @@ export function SettingsWindow() {
             onChange={(event) => {
               const baseUrl = event.target.value;
 
-              setForm((currentForm) => {
-                if (!currentForm) {
-                  return currentForm;
-                }
-
-                return {
-                  ...currentForm,
-                  providerProfiles: updateProviderProfile(
-                    currentForm.providerProfiles,
-                    currentForm.provider,
-                    {
-                      baseUrl,
-                    },
-                  ),
-                };
-              });
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      providerProfiles: updateProviderProfile(
+                        currentForm.providerProfiles,
+                        currentForm.provider,
+                        { baseUrl },
+                      ),
+                    }
+                  : currentForm,
+              );
             }}
           />
         </label>
@@ -448,22 +751,18 @@ export function SettingsWindow() {
             onChange={(event) => {
               const apiKey = event.target.value;
 
-              setForm((currentForm) => {
-                if (!currentForm) {
-                  return currentForm;
-                }
-
-                return {
-                  ...currentForm,
-                  providerProfiles: updateProviderProfile(
-                    currentForm.providerProfiles,
-                    currentForm.provider,
-                    {
-                      apiKey,
-                    },
-                  ),
-                };
-              });
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      providerProfiles: updateProviderProfile(
+                        currentForm.providerProfiles,
+                        currentForm.provider,
+                        { apiKey },
+                      ),
+                    }
+                  : currentForm,
+              );
             }}
           />
         </label>
@@ -479,22 +778,18 @@ export function SettingsWindow() {
               onChange={(event) => {
                 const model = event.target.value;
 
-                setForm((currentForm) => {
-                  if (!currentForm) {
-                    return currentForm;
-                  }
-
-                  return {
-                    ...currentForm,
-                    providerProfiles: updateProviderProfile(
-                      currentForm.providerProfiles,
-                      currentForm.provider,
-                      {
-                        model,
-                      },
-                    ),
-                  };
-                });
+                setForm((currentForm) =>
+                  currentForm
+                    ? {
+                        ...currentForm,
+                        providerProfiles: updateProviderProfile(
+                          currentForm.providerProfiles,
+                          currentForm.provider,
+                          { model },
+                        ),
+                      }
+                    : currentForm,
+                );
               }}
             />
             <button
@@ -516,22 +811,18 @@ export function SettingsWindow() {
                 type="button"
                 title={`填入模型：${model}`}
                 onClick={() => {
-                  setForm((currentForm) => {
-                    if (!currentForm) {
-                      return currentForm;
-                    }
-
-                    return {
-                      ...currentForm,
-                      providerProfiles: updateProviderProfile(
-                        currentForm.providerProfiles,
-                        currentForm.provider,
-                        {
-                          model,
-                        },
-                      ),
-                    };
-                  });
+                  setForm((currentForm) =>
+                    currentForm
+                      ? {
+                          ...currentForm,
+                          providerProfiles: updateProviderProfile(
+                            currentForm.providerProfiles,
+                            currentForm.provider,
+                            { model },
+                          ),
+                        }
+                      : currentForm,
+                  );
                   setModelHint({
                     message: `已选中模型：${model}`,
                     tone: "success",
@@ -569,14 +860,8 @@ export function SettingsWindow() {
             value={form?.ocrIntervalMs ?? ""}
             onChange={(event) => {
               const ocrIntervalMs = event.target.value;
-
               setForm((currentForm) =>
-                currentForm
-                  ? {
-                      ...currentForm,
-                      ocrIntervalMs,
-                    }
-                  : currentForm,
+                currentForm ? { ...currentForm, ocrIntervalMs } : currentForm,
               );
             }}
           />
@@ -592,14 +877,8 @@ export function SettingsWindow() {
             value={form?.stableFrames ?? ""}
             onChange={(event) => {
               const stableFrames = event.target.value;
-
               setForm((currentForm) =>
-                currentForm
-                  ? {
-                      ...currentForm,
-                      stableFrames,
-                    }
-                  : currentForm,
+                currentForm ? { ...currentForm, stableFrames } : currentForm,
               );
             }}
           />
@@ -615,14 +894,8 @@ export function SettingsWindow() {
             value={form?.similarityThreshold ?? ""}
             onChange={(event) => {
               const similarityThreshold = event.target.value;
-
               setForm((currentForm) =>
-                currentForm
-                  ? {
-                      ...currentForm,
-                      similarityThreshold,
-                    }
-                  : currentForm,
+                currentForm ? { ...currentForm, similarityThreshold } : currentForm,
               );
             }}
           />
@@ -638,14 +911,8 @@ export function SettingsWindow() {
             value={form?.blankClearMs ?? ""}
             onChange={(event) => {
               const blankClearMs = event.target.value;
-
               setForm((currentForm) =>
-                currentForm
-                  ? {
-                      ...currentForm,
-                      blankClearMs,
-                    }
-                  : currentForm,
+                currentForm ? { ...currentForm, blankClearMs } : currentForm,
               );
             }}
           />

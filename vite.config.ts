@@ -13,6 +13,7 @@ export default defineConfig(async () => ({
         main: resolve(__dirname, "pages/overlay.html"),
         settings: resolve(__dirname, "pages/settings.html"),
         "ocr-region": resolve(__dirname, "pages/ocr-region.html"),
+        "ocr-runtime": resolve(__dirname, "pages/ocr-runtime.html"),
         "subtitle-explain": resolve(__dirname, "pages/subtitle-explain.html"),
       },
     },

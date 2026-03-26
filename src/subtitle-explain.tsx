@@ -366,6 +366,12 @@ export function SubtitleExplainWindow() {
 
   const persistWindowState = useEffectEvent(async (visible: boolean) => {
     try {
+      const isVisible = await appWindow.isVisible();
+
+      if (!isVisible) {
+        return;
+      }
+
       const scaleFactor = await appWindow.scaleFactor();
       const [size, position] = await Promise.all([
         appWindow.innerSize(),
@@ -433,13 +439,21 @@ export function SubtitleExplainWindow() {
 
     cleanupScope.register(
       appWindow.onResized(() => {
-        scheduleWindowStatePersist(true);
+        void appWindow.isVisible().then((visible) => {
+          if (visible) {
+            scheduleWindowStatePersist(true);
+          }
+        });
       }),
     );
 
     cleanupScope.register(
       appWindow.onMoved(() => {
-        scheduleWindowStatePersist(true);
+        void appWindow.isVisible().then((visible) => {
+          if (visible) {
+            scheduleWindowStatePersist(true);
+          }
+        });
       }),
     );
 

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main, settings, ocr-region and subtitle-explain windows",
-  "windows": ["main", "settings", "ocr-region", "subtitle-explain"],
+  "description": "Capability for the main, settings, ocr-region, ocr-runtime and subtitle-explain windows",
+  "windows": ["main", "settings", "ocr-region", "ocr-runtime", "subtitle-explain"],
   "permissions": [
     "core:default",
     "core:event:default",

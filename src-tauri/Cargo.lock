@@ -782,6 +782,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tauri-plugin-store",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "xcap",
 ]

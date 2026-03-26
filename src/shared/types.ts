@@ -55,11 +55,57 @@ export type SubtitleProvider = "openAiResponses" | "ollama";
 export type SubtitleExplainMode = "phrase" | "word";
 export type StyleMode = "default" | "contrast" | "contrastLight";
 export type StatusTone = "idle" | "success" | "error";
+export type OcrEngine = "windowsOcr" | "tesseract" | "paddleOcr";
+export type OcrLanguage =
+  | "auto"
+  | "zhCn"
+  | "zhTw"
+  | "en"
+  | "yue"
+  | "ja"
+  | "ko"
+  | "fr"
+  | "es"
+  | "ru"
+  | "de"
+  | "it"
+  | "tr"
+  | "pt"
+  | "ptBr"
+  | "vi"
+  | "id"
+  | "th"
+  | "ms"
+  | "ar"
+  | "hi"
+  | "uk"
+  | "he";
 
 export type ProviderConnectionSettings = {
   baseUrl: string;
   apiKey: string;
   model: string;
+};
+
+export type TesseractOcrProfile = {
+  pageSegMode: number;
+};
+
+export type OcrEngineProfiles = {
+  tesseract: TesseractOcrProfile;
+};
+
+export type OcrSettings = {
+  engine: OcrEngine;
+  language: OcrLanguage;
+  profiles: OcrEngineProfiles;
+};
+
+export type OcrEngineAvailability = {
+  engine: OcrEngine;
+  label: string;
+  available: boolean;
+  reason: string | null;
 };
 
 export type SubtitleProviderProfiles = {
@@ -75,6 +121,7 @@ export type SubtitleExplainSettings = {
   apiKey: string;
   model: string;
   providerProfiles: SubtitleProviderProfiles;
+  ocrSettings: OcrSettings;
   ocrIntervalMs: number;
   stableFrames: number;
   similarityThreshold: number;
