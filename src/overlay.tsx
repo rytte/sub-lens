@@ -61,7 +61,7 @@ function overlayHintText(state: OverlayState) {
     return "自动水平居中已开启，可上下拖动，Ctrl+Shift+E 编辑 OCR 区域。";
   }
 
-  return "右键打开系统菜单，Ctrl+Shift+E 编辑 OCR 区域，Ctrl+Shift+J 解析当前字幕。";
+  return "右键打开菜单。";
 }
 
 export function OverlayWindow() {

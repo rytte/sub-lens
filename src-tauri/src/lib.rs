@@ -70,10 +70,11 @@ const MENU_REFRESH_RATE_20: &str = "refresh_rate_20";
 const MENU_PIXEL_DETAIL_COARSE: &str = "pixel_detail_coarse";
 const MENU_PIXEL_DETAIL_MEDIUM: &str = "pixel_detail_medium";
 const MENU_PIXEL_DETAIL_FINE: &str = "pixel_detail_fine";
-const MENU_OPACITY_20: &str = "opacity_20";
-const MENU_OPACITY_40: &str = "opacity_40";
+const MENU_OPACITY_50: &str = "opacity_50";
 const MENU_OPACITY_60: &str = "opacity_60";
+const MENU_OPACITY_70: &str = "opacity_70";
 const MENU_OPACITY_80: &str = "opacity_80";
+const MENU_OPACITY_90: &str = "opacity_90";
 const MENU_OPACITY_100: &str = "opacity_100";
 const MENU_APPEARANCE_PIXELATE: &str = "appearance_pixelate";
 const MENU_APPEARANCE_SOLID: &str = "appearance_solid";
@@ -862,7 +863,7 @@ fn refresh_tray_menu(app: &AppHandle, overlay: &OverlayStatePayload) -> Result<(
         return Ok(());
     };
 
-    let menu = build_overlay_menu(app, overlay).map_err(|err| err.to_string())?;
+    let menu = build_tray_menu(app, overlay).map_err(|err| err.to_string())?;
     tray.set_menu(Some(menu)).map_err(|err| err.to_string())
 }
 
@@ -2111,20 +2112,12 @@ fn build_overlay_menu(
         None::<&str>,
     )?;
 
-    let opacity_20 = CheckMenuItem::with_id(
+    let opacity_50 = CheckMenuItem::with_id(
         app,
-        MENU_OPACITY_20,
-        "20%",
+        MENU_OPACITY_50,
+        "50%",
         true,
-        is_opacity_selected(overlay.opacity, 0.2),
-        None::<&str>,
-    )?;
-    let opacity_40 = CheckMenuItem::with_id(
-        app,
-        MENU_OPACITY_40,
-        "40%",
-        true,
-        is_opacity_selected(overlay.opacity, 0.4),
+        is_opacity_selected(overlay.opacity, 0.5),
         None::<&str>,
     )?;
     let opacity_60 = CheckMenuItem::with_id(
@@ -2135,12 +2128,28 @@ fn build_overlay_menu(
         is_opacity_selected(overlay.opacity, 0.6),
         None::<&str>,
     )?;
+    let opacity_70 = CheckMenuItem::with_id(
+        app,
+        MENU_OPACITY_70,
+        "70%",
+        true,
+        is_opacity_selected(overlay.opacity, 0.7),
+        None::<&str>,
+    )?;
     let opacity_80 = CheckMenuItem::with_id(
         app,
         MENU_OPACITY_80,
         "80%",
         true,
         is_opacity_selected(overlay.opacity, 0.8),
+        None::<&str>,
+    )?;
+    let opacity_90 = CheckMenuItem::with_id(
+        app,
+        MENU_OPACITY_90,
+        "90%",
+        true,
+        is_opacity_selected(overlay.opacity, 0.9),
         None::<&str>,
     )?;
     let opacity_100 = CheckMenuItem::with_id(
@@ -2151,11 +2160,12 @@ fn build_overlay_menu(
         is_opacity_selected(overlay.opacity, 1.0),
         None::<&str>,
     )?;
-    let opacity_items: [&dyn IsMenuItem<tauri::Wry>; 5] = [
-        &opacity_20,
-        &opacity_40,
+    let opacity_items: [&dyn IsMenuItem<tauri::Wry>; 6] = [
+        &opacity_50,
         &opacity_60,
+        &opacity_70,
         &opacity_80,
+        &opacity_90,
         &opacity_100,
     ];
     let opacity_menu = Submenu::with_items(app, "不透明度", true, &opacity_items)?;
@@ -2305,14 +2315,13 @@ fn build_overlay_menu(
     let separator_a = PredefinedMenuItem::separator(app)?;
     let separator_b = PredefinedMenuItem::separator(app)?;
     let separator_c = PredefinedMenuItem::separator(app)?;
-    let separator_d = PredefinedMenuItem::separator(app)?;
+    let _separator_d = PredefinedMenuItem::separator(app)?;
 
-    let items: [&dyn IsMenuItem<tauri::Wry>; 16] = [
+    let items: [&dyn IsMenuItem<tauri::Wry>; 13] = [
         &visibility,
         &lock,
         &click_through,
         &auto_center,
-        &show_subtitle_explain,
         &separator_a,
         &appearance_menu,
         &refresh_rate_menu,
@@ -2322,11 +2331,60 @@ fn build_overlay_menu(
         &separator_b,
         &always_on_top,
         &reset_position,
-        &separator_c,
-        &more_settings,
     ];
     let menu = Menu::with_items(app, &items)?;
-    menu.append(&separator_d)?;
+    Ok(menu)
+}
+
+fn build_tray_menu(
+    app: &AppHandle,
+    overlay: &OverlayStatePayload,
+) -> Result<Menu<tauri::Wry>, tauri::Error> {
+    let visibility = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_VISIBLE,
+        if overlay.visible { "隐藏遮挡条" } else { "显示遮挡条" },
+        true,
+        Some("Ctrl+Alt+H"),
+    )?;
+    let lock = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_LOCK,
+        if overlay.locked {
+            "解锁遮挡条"
+        } else {
+            "锁定遮挡条"
+        },
+        true,
+        Some("Ctrl+Alt+Space"),
+    )?;
+    let reset_position =
+        MenuItem::with_id(app, MENU_RESET_POSITION, "重置遮挡条位置", true, None::<&str>)?;
+    let show_subtitle_explain = MenuItem::with_id(
+        app,
+        MENU_SHOW_SUBTITLE_EXPLAIN,
+        "打开字幕助手",
+        true,
+        None::<&str>,
+    )?;
+    let more_settings =
+        MenuItem::with_id(app, MENU_OPEN_MORE_SETTINGS, "更多设置", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
+    let separator_a = PredefinedMenuItem::separator(app)?;
+    let separator_b = PredefinedMenuItem::separator(app)?;
+    let separator_c = PredefinedMenuItem::separator(app)?;
+
+    let items: [&dyn IsMenuItem<tauri::Wry>; 8] = [
+        &visibility,
+        &lock,
+        &reset_position,
+        &separator_a,
+        &show_subtitle_explain,
+        &separator_b,
+        &more_settings,
+        &separator_c,
+    ];
+    let menu = Menu::with_items(app, &items)?;
     menu.append(&quit)?;
     Ok(menu)
 }
@@ -2356,10 +2414,11 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         MENU_PIXEL_DETAIL_COARSE => set_pixel_detail(app, PixelDetail::Coarse),
         MENU_PIXEL_DETAIL_MEDIUM => set_pixel_detail(app, PixelDetail::Medium),
         MENU_PIXEL_DETAIL_FINE => set_pixel_detail(app, PixelDetail::Fine),
-        MENU_OPACITY_20 => set_opacity(app, 0.2),
-        MENU_OPACITY_40 => set_opacity(app, 0.4),
+        MENU_OPACITY_50 => set_opacity(app, 0.5),
         MENU_OPACITY_60 => set_opacity(app, 0.6),
+        MENU_OPACITY_70 => set_opacity(app, 0.7),
         MENU_OPACITY_80 => set_opacity(app, 0.8),
+        MENU_OPACITY_90 => set_opacity(app, 0.9),
         MENU_OPACITY_100 => set_opacity(app, 1.0),
         MENU_APPEARANCE_PIXELATE => set_appearance(app, OverlayAppearance::Pixelate),
         MENU_APPEARANCE_SOLID => set_appearance(app, OverlayAppearance::Solid),
@@ -2709,7 +2768,7 @@ fn start_ctrl_hold_loop(_app: AppHandle) {}
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let overlay = current_overlay_state(app).map_err(|err| err.to_string())?;
-    let menu = build_overlay_menu(app, &overlay)?;
+    let menu = build_tray_menu(app, &overlay)?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(
