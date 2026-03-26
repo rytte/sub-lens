@@ -985,6 +985,45 @@ fn sync_subtitle_explain_window_state_from_window(
     Ok(next_state)
 }
 
+fn sync_ocr_region_state_from_window(
+    app: &AppHandle,
+    visible_override: Option<bool>,
+) -> Result<OcrRegionStatePayload, String> {
+    let window_geometry = if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
+        let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
+        let size = window.inner_size().map_err(|err| err.to_string())?;
+        let position = window.outer_position().map_err(|err| err.to_string())?;
+        Some((
+            f64::from(size.width) / scale_factor,
+            f64::from(size.height) / scale_factor,
+            f64::from(position.x) / scale_factor,
+            f64::from(position.y) / scale_factor,
+        ))
+    } else {
+        None
+    };
+
+    let next_state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        if let Some((width, height, x, y)) = window_geometry {
+            shared.ocr_region.width = width;
+            shared.ocr_region.height = height;
+            shared.ocr_region.x = Some(x);
+            shared.ocr_region.y = Some(y);
+        }
+        if let Some(visible) = visible_override {
+            shared.ocr_region.visible = visible;
+        }
+        shared.ocr_region = sanitize_ocr_region_state(shared.ocr_region.clone());
+        shared.ocr_region.clone()
+    };
+
+    save_ocr_region(app, &next_state)?;
+    emit_ocr_region_state(app, &next_state)?;
+    Ok(next_state)
+}
+
 fn current_subtitle_status(app: &AppHandle) -> Result<SubtitleStatusPayload, String> {
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
@@ -1659,9 +1698,9 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
 }
 
 fn hide_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
-    update_ocr_region_state(app, false, false, |shared| {
-        shared.ocr_region.visible = false;
-    })
+    let state = sync_ocr_region_state_from_window(app, Some(false))?;
+    apply_ocr_region_window_state(app, &state)?;
+    Ok(state)
 }
 
 fn toggle_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
@@ -2075,9 +2114,7 @@ fn capture_ocr_region_image(app: &AppHandle, engine: OcrEngine) -> Result<PathBu
     })();
 
     if region.visible {
-        let _ = update_ocr_region_state(app, false, false, |shared| {
-            shared.ocr_region.visible = false;
-        });
+        let _ = hide_ocr_region_editor(app);
     } else if was_effectively_visible {
         let _ = apply_ocr_region_window_state(app, &region);
     }
@@ -2936,6 +2973,29 @@ fn apply_ocr_region_state(
 }
 
 #[tauri::command]
+fn save_ocr_region_window_state_command(
+    app: AppHandle,
+    next_state: OcrRegionStatePayload,
+) -> Result<OcrRegionStatePayload, String> {
+    let next_state = sanitize_ocr_region_state(next_state);
+    let state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.ocr_region.width = next_state.width;
+        shared.ocr_region.height = next_state.height;
+        shared.ocr_region.x = next_state.x;
+        shared.ocr_region.y = next_state.y;
+        shared.ocr_region.visible = next_state.visible;
+        shared.ocr_region.show_border_when_idle = next_state.show_border_when_idle;
+        shared.ocr_region.clone()
+    };
+
+    save_ocr_region(&app, &state)?;
+    emit_ocr_region_state(&app, &state)?;
+    Ok(state)
+}
+
+#[tauri::command]
 fn load_overlay_state(app: AppHandle) -> Result<OverlayStatePayload, String> {
     current_overlay_state(&app)
 }
@@ -3407,6 +3467,7 @@ pub fn run() {
             load_overlay_state,
             load_ocr_region_state,
             apply_ocr_region_state,
+            save_ocr_region_window_state_command,
             show_ocr_region,
             hide_ocr_region,
             load_subtitle_explain_settings,

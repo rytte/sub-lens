@@ -39,6 +39,12 @@ export function OcrRegionWindow() {
     }
 
     try {
+      const isVisible = await appWindow.isVisible();
+
+      if (!isVisible || !currentState.visible) {
+        return;
+      }
+
       const [scaleFactor, position, size] = await Promise.all([
         appWindow.scaleFactor(),
         appWindow.outerPosition(),
@@ -51,9 +57,12 @@ export function OcrRegionWindow() {
         x: position.x / scaleFactor,
         y: position.y / scaleFactor,
       };
-      const savedState = await invoke<OcrRegionState>("apply_ocr_region_state", {
-        nextState,
-      });
+      const savedState = await invoke<OcrRegionState>(
+        "save_ocr_region_window_state_command",
+        {
+          nextState,
+        },
+      );
 
       stateRef.current = savedState;
       setState(savedState);
@@ -98,13 +107,21 @@ export function OcrRegionWindow() {
 
     cleanupScope.register(
       appWindow.onMoved(() => {
-        scheduleGeometrySync();
+        void appWindow.isVisible().then((visible) => {
+          if (visible) {
+            scheduleGeometrySync();
+          }
+        });
       }),
     );
 
     cleanupScope.register(
       appWindow.onResized(() => {
-        scheduleGeometrySync();
+        void appWindow.isVisible().then((visible) => {
+          if (visible) {
+            scheduleGeometrySync();
+          }
+        });
       }),
     );
 
