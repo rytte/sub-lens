@@ -14,9 +14,27 @@ import type {
   SubtitleExplainSettings,
   SubtitleProvider,
   SubtitleProviderProfiles,
+  TrayClickAction,
 } from "./shared/types";
 
 const appWindow = getCurrentWindow();
+
+const TRAY_CLICK_ACTION_OPTIONS: Array<{
+  value: TrayClickAction;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "overlay",
+    label: "字幕遮挡窗口",
+    description: "单击托盘图标时切换字幕遮挡窗口的显示/隐藏。",
+  },
+  {
+    value: "subtitleExplain",
+    label: "字幕助手窗口",
+    description: "单击托盘图标时切换字幕助手窗口的显示/隐藏。",
+  },
+];
 
 const OCR_ENGINE_OPTIONS: Array<{
   value: OcrEngine;
@@ -78,6 +96,7 @@ type SettingsFormState = {
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
   explainMode: SubtitleExplainMode;
+  trayClickAction: TrayClickAction;
   providerProfiles: SubtitleProviderProfiles;
   ocrEngine: OcrEngine;
   ocrLanguage: OcrLanguage;
@@ -102,6 +121,7 @@ function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
     realtimeEnabled: settings.realtimeEnabled,
     provider: settings.provider,
     explainMode: settings.explainMode,
+    trayClickAction: settings.trayClickAction,
     providerProfiles: cloneProfiles(settings.providerProfiles),
     ocrEngine: settings.ocrSettings.engine,
     ocrLanguage: settings.ocrSettings.language,
@@ -168,6 +188,7 @@ function buildSettings(
     realtimeEnabled: form.realtimeEnabled,
     provider: form.provider,
     explainMode: form.explainMode,
+    trayClickAction: form.trayClickAction,
     baseUrl: activeProfile.baseUrl,
     apiKey: activeProfile.apiKey,
     model: activeProfile.model,
@@ -189,6 +210,13 @@ function providerHint(provider: SubtitleProvider) {
   }
 
   return "本地 Ollama 常见地址是 http://127.0.0.1:11434，通常可以不填 API Key。";
+}
+
+function trayClickActionHint(action: TrayClickAction) {
+  return (
+    TRAY_CLICK_ACTION_OPTIONS.find((option) => option.value === action)?.description ??
+    ""
+  );
 }
 
 function defaultModelHint(provider: SubtitleProvider) {
@@ -678,6 +706,42 @@ export function SettingsWindow() {
         <p className="inline-hint full-span">
           {form ? defaultOcrHint(form.ocrEngine) : ""}
         </p>
+      </section>
+
+      <section className="settings-card section-grid">
+        <div className="section-head">
+          <div>
+            <h2>托盘点击</h2>
+          </div>
+        </div>
+        <label className="field">
+          <span className="field-label">单击托盘图标</span>
+          <select
+            className="text-input select-input"
+            value={form?.trayClickAction ?? "overlay"}
+            onChange={(event) => {
+              const trayClickAction = event.target.value as TrayClickAction;
+
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      trayClickAction,
+                    }
+                  : currentForm,
+              );
+            }}
+          >
+            {TRAY_CLICK_ACTION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="field-help" data-tone="idle">
+            {trayClickActionHint(form?.trayClickAction ?? "overlay")}
+          </span>
+        </label>
       </section>
 
       <section className="settings-card section-grid">

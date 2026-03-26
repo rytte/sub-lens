@@ -160,6 +160,19 @@ impl Default for SubtitleExplainMode {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TrayClickAction {
+    Overlay,
+    SubtitleExplain,
+}
+
+impl Default for TrayClickAction {
+    fn default() -> Self {
+        Self::Overlay
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PixelFramePayload {
@@ -210,6 +223,7 @@ struct SubtitleExplainSettingsPayload {
     realtime_enabled: bool,
     provider: SubtitleProvider,
     explain_mode: SubtitleExplainMode,
+    tray_click_action: TrayClickAction,
     base_url: String,
     api_key: String,
     model: String,
@@ -374,6 +388,7 @@ impl Default for SubtitleExplainSettingsPayload {
             model: active_profile.model,
             provider,
             explain_mode: SubtitleExplainMode::default(),
+            tray_click_action: TrayClickAction::default(),
             provider_profiles,
             ocr_settings: OcrSettingsPayload::default(),
             ocr_interval_ms: 300,
@@ -1744,6 +1759,16 @@ fn open_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
     state.visible = true;
     commit_subtitle_explain_window_state(app, state, true, true, true)?;
     Ok(())
+}
+
+fn toggle_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
+    if current_subtitle_explain_window_state(app)?.visible {
+        let state = sync_subtitle_explain_window_state_from_window(app, Some(false))?;
+        commit_subtitle_explain_window_state(app, state, true, true, false)?;
+        Ok(())
+    } else {
+        open_subtitle_explain_window(app)
+    }
 }
 
 fn sync_persisted_window_states(app: &AppHandle) {
@@ -3357,7 +3382,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             } = event
             {
                 let app = tray.app_handle();
-                if let Err(err) = toggle_visibility(&app) {
+                let result = match current_subtitle_settings(&app)
+                    .map(|settings| settings.tray_click_action)
+                    .unwrap_or_default()
+                {
+                    TrayClickAction::Overlay => toggle_visibility(&app).map(|_| ()),
+                    TrayClickAction::SubtitleExplain => toggle_subtitle_explain_window(&app),
+                };
+
+                if let Err(err) = result {
                     eprintln!("tray left click failed: {err}");
                 }
             }

@@ -53,6 +53,7 @@ export type SubtitleExplainWindowState = {
 
 export type SubtitleProvider = "openAiResponses" | "ollama";
 export type SubtitleExplainMode = "phrase" | "word";
+export type TrayClickAction = "overlay" | "subtitleExplain";
 export type StyleMode = "default" | "contrast" | "contrastLight";
 export type StatusTone = "idle" | "success" | "error";
 export type OcrEngine = "windowsOcr" | "tesseract" | "paddleOcr";
@@ -117,6 +118,7 @@ export type SubtitleExplainSettings = {
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
   explainMode: SubtitleExplainMode;
+  trayClickAction: TrayClickAction;
   baseUrl: string;
   apiKey: string;
   model: string;
