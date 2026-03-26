@@ -917,6 +917,14 @@ fn current_subtitle_settings(app: &AppHandle) -> Result<SubtitleExplainSettingsP
     Ok(shared.subtitle_settings.clone())
 }
 
+fn current_subtitle_explain_window_state(
+    app: &AppHandle,
+) -> Result<SubtitleExplainWindowStatePayload, String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.subtitle_explain_window.clone())
+}
+
 fn sync_overlay_state_from_window(app: &AppHandle) -> Result<OverlayStatePayload, String> {
     let Some(window) = app.get_webview_window("main") else {
         return current_overlay_state(app);
@@ -949,6 +957,7 @@ fn sync_subtitle_explain_window_state_from_window(
     app: &AppHandle,
     visible_override: Option<bool>,
 ) -> Result<SubtitleExplainWindowStatePayload, String> {
+    let mut next_state = current_subtitle_explain_window_state(app)?;
     let window_geometry =
         if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
             let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
@@ -964,31 +973,24 @@ fn sync_subtitle_explain_window_state_from_window(
             None
         };
 
-    let next_state = {
-        let state = app.state::<AppState>();
-        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        if let Some((width, height, x, y)) = window_geometry {
-            shared.subtitle_explain_window.width = width;
-            shared.subtitle_explain_window.height = height;
-            shared.subtitle_explain_window.x = Some(x);
-            shared.subtitle_explain_window.y = Some(y);
-        }
-        if let Some(visible) = visible_override {
-            shared.subtitle_explain_window.visible = visible;
-        }
-        shared.subtitle_explain_window =
-            sanitize_subtitle_explain_window_state(shared.subtitle_explain_window.clone());
-        shared.subtitle_explain_window.clone()
-    };
+    if let Some((width, height, x, y)) = window_geometry {
+        next_state.width = width;
+        next_state.height = height;
+        next_state.x = Some(x);
+        next_state.y = Some(y);
+    }
+    if let Some(visible) = visible_override {
+        next_state.visible = visible;
+    }
 
-    save_subtitle_explain_window_state(app, &next_state)?;
-    Ok(next_state)
+    commit_subtitle_explain_window_state(app, next_state, false, true, false)
 }
 
 fn sync_ocr_region_state_from_window(
     app: &AppHandle,
     visible_override: Option<bool>,
 ) -> Result<OcrRegionStatePayload, String> {
+    let mut next_state = current_ocr_region_state(app)?;
     let window_geometry = if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
         let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
         let size = window.inner_size().map_err(|err| err.to_string())?;
@@ -1003,25 +1005,17 @@ fn sync_ocr_region_state_from_window(
         None
     };
 
-    let next_state = {
-        let state = app.state::<AppState>();
-        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        if let Some((width, height, x, y)) = window_geometry {
-            shared.ocr_region.width = width;
-            shared.ocr_region.height = height;
-            shared.ocr_region.x = Some(x);
-            shared.ocr_region.y = Some(y);
-        }
-        if let Some(visible) = visible_override {
-            shared.ocr_region.visible = visible;
-        }
-        shared.ocr_region = sanitize_ocr_region_state(shared.ocr_region.clone());
-        shared.ocr_region.clone()
-    };
+    if let Some((width, height, x, y)) = window_geometry {
+        next_state.width = width;
+        next_state.height = height;
+        next_state.x = Some(x);
+        next_state.y = Some(y);
+    }
+    if let Some(visible) = visible_override {
+        next_state.visible = visible;
+    }
 
-    save_ocr_region(app, &next_state)?;
-    emit_ocr_region_state(app, &next_state)?;
-    Ok(next_state)
+    commit_ocr_region_state(app, next_state, false, true, false)
 }
 
 fn current_subtitle_status(app: &AppHandle) -> Result<SubtitleStatusPayload, String> {
@@ -1382,6 +1376,31 @@ fn apply_subtitle_explain_window_state(
     Ok(())
 }
 
+fn commit_subtitle_explain_window_state(
+    app: &AppHandle,
+    next_state: SubtitleExplainWindowStatePayload,
+    apply_window: bool,
+    persist: bool,
+    focus_window: bool,
+) -> Result<SubtitleExplainWindowStatePayload, String> {
+    let state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.subtitle_explain_window = sanitize_subtitle_explain_window_state(next_state);
+        shared.subtitle_explain_window.clone()
+    };
+
+    if apply_window {
+        apply_subtitle_explain_window_state(app, &state, focus_window)?;
+    }
+
+    if persist {
+        save_subtitle_explain_window_state(app, &state)?;
+    }
+
+    Ok(state)
+}
+
 fn apply_ocr_region_window_state(
     app: &AppHandle,
     region: &OcrRegionStatePayload,
@@ -1406,24 +1425,23 @@ fn apply_ocr_region_window_state(
     apply_window_visibility(&window, effective_ocr_region_visibility(region))
 }
 
-fn update_ocr_region_state<F>(
+fn commit_ocr_region_state(
     app: &AppHandle,
+    next_state: OcrRegionStatePayload,
+    apply_window: bool,
     persist: bool,
     focus_window: bool,
-    updater: F,
-) -> Result<OcrRegionStatePayload, String>
-where
-    F: FnOnce(&mut SharedState),
-{
+) -> Result<OcrRegionStatePayload, String> {
     let region = {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        updater(&mut shared);
-        shared.ocr_region = sanitize_ocr_region_state(shared.ocr_region.clone());
+        shared.ocr_region = sanitize_ocr_region_state(next_state);
         shared.ocr_region.clone()
     };
 
-    apply_ocr_region_window_state(app, &region)?;
+    if apply_window {
+        apply_ocr_region_window_state(app, &region)?;
+    }
 
     if persist {
         save_ocr_region(app, &region)?;
@@ -1674,19 +1692,17 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
         .map_err(|err| err.to_string())?;
     let size = main_window.inner_size().map_err(|err| err.to_string())?;
 
-    let region = update_ocr_region_state(app, false, true, move |shared| {
-        let should_initialize_geometry =
-            shared.ocr_region.x.is_none() || shared.ocr_region.y.is_none();
-        shared.ocr_region.visible = true;
-        if should_initialize_geometry {
-            shared.ocr_region.x = Some(f64::from(position.x) / scale_factor);
-            shared.ocr_region.y = Some(f64::from(position.y) / scale_factor);
-            shared.ocr_region.width =
-                (f64::from(size.width) / scale_factor).max(MIN_OCR_REGION_WIDTH);
-            shared.ocr_region.height =
-                (f64::from(size.height) / scale_factor).max(MIN_OCR_REGION_HEIGHT);
-        }
-    })?;
+    let mut next_state = current_ocr_region_state(app)?;
+    let should_initialize_geometry = next_state.x.is_none() || next_state.y.is_none();
+    next_state.visible = true;
+    if should_initialize_geometry {
+        next_state.x = Some(f64::from(position.x) / scale_factor);
+        next_state.y = Some(f64::from(position.y) / scale_factor);
+        next_state.width = (f64::from(size.width) / scale_factor).max(MIN_OCR_REGION_WIDTH);
+        next_state.height = (f64::from(size.height) / scale_factor).max(MIN_OCR_REGION_HEIGHT);
+    }
+
+    let region = commit_ocr_region_state(app, next_state, true, false, true)?;
 
     if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
         let _ = window.unminimize();
@@ -1724,18 +1740,10 @@ fn open_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    let state = {
-        let state = app.state::<AppState>();
-        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        shared.subtitle_explain_window.visible = true;
-        let next_state =
-            sanitize_subtitle_explain_window_state(shared.subtitle_explain_window.clone());
-        shared.subtitle_explain_window = next_state.clone();
-        next_state
-    };
-
-    save_subtitle_explain_window_state(app, &state)?;
-    apply_subtitle_explain_window_state(app, &state, true)
+    let mut state = current_subtitle_explain_window_state(app)?;
+    state.visible = true;
+    commit_subtitle_explain_window_state(app, state, true, true, true)?;
+    Ok(())
 }
 
 fn sync_persisted_window_states(app: &AppHandle) {
@@ -2944,7 +2952,8 @@ fn open_subtitle_explain(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn hide_subtitle_explain(app: AppHandle) -> Result<(), String> {
     let state = sync_subtitle_explain_window_state_from_window(&app, Some(false))?;
-    apply_subtitle_explain_window_state(&app, &state, false)
+    commit_subtitle_explain_window_state(&app, state, true, true, false)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2967,9 +2976,7 @@ fn apply_ocr_region_state(
     app: AppHandle,
     next_state: OcrRegionStatePayload,
 ) -> Result<OcrRegionStatePayload, String> {
-    update_ocr_region_state(&app, true, false, move |shared| {
-        shared.ocr_region = next_state;
-    })
+    commit_ocr_region_state(&app, next_state, true, true, false)
 }
 
 #[tauri::command]
@@ -2977,22 +2984,15 @@ fn save_ocr_region_window_state_command(
     app: AppHandle,
     next_state: OcrRegionStatePayload,
 ) -> Result<OcrRegionStatePayload, String> {
-    let next_state = sanitize_ocr_region_state(next_state);
-    let state = {
-        let state = app.state::<AppState>();
-        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        shared.ocr_region.width = next_state.width;
-        shared.ocr_region.height = next_state.height;
-        shared.ocr_region.x = next_state.x;
-        shared.ocr_region.y = next_state.y;
-        shared.ocr_region.visible = next_state.visible;
-        shared.ocr_region.show_border_when_idle = next_state.show_border_when_idle;
-        shared.ocr_region.clone()
-    };
+    let mut state = current_ocr_region_state(&app)?;
+    state.width = next_state.width;
+    state.height = next_state.height;
+    state.x = next_state.x;
+    state.y = next_state.y;
+    state.visible = next_state.visible;
+    state.show_border_when_idle = next_state.show_border_when_idle;
 
-    save_ocr_region(&app, &state)?;
-    emit_ocr_region_state(&app, &state)?;
-    Ok(state)
+    commit_ocr_region_state(&app, state, false, true, false)
 }
 
 #[tauri::command]
@@ -3012,20 +3012,28 @@ fn save_subtitle_explain_window_state_command(
     app: AppHandle,
     next_state: SubtitleExplainWindowStatePayload,
 ) -> Result<SubtitleExplainWindowStatePayload, String> {
-    let next_state = sanitize_subtitle_explain_window_state(next_state);
-    let state = {
-        let state = app.state::<AppState>();
-        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
-        shared.subtitle_explain_window.visible = next_state.visible;
-        shared.subtitle_explain_window.width = next_state.width;
-        shared.subtitle_explain_window.height = next_state.height;
-        shared.subtitle_explain_window.x = next_state.x;
-        shared.subtitle_explain_window.y = next_state.y;
-        shared.subtitle_explain_window.clone()
+    let state = current_subtitle_explain_window_state(&app)?;
+    let next_state = SubtitleExplainWindowStatePayload {
+        visible: next_state.visible,
+        width: next_state.width,
+        height: next_state.height,
+        x: next_state.x,
+        y: next_state.y,
     };
 
-    save_subtitle_explain_window_state(&app, &state)?;
-    Ok(state)
+    commit_subtitle_explain_window_state(
+        &app,
+        SubtitleExplainWindowStatePayload {
+            visible: next_state.visible,
+            width: next_state.width,
+            height: next_state.height,
+            x: next_state.x.or(state.x),
+            y: next_state.y.or(state.y),
+        },
+        false,
+        true,
+        false,
+    )
 }
 
 #[tauri::command]
