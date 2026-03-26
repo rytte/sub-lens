@@ -1,0 +1,99 @@
+export type OverlayAppearance = "pixelate" | "solid";
+
+export type OverlayResizeDirection =
+  | "East"
+  | "North"
+  | "NorthEast"
+  | "NorthWest"
+  | "South"
+  | "SouthEast"
+  | "SouthWest"
+  | "West";
+
+export type HorizontalResizeDirection = "East" | "West";
+
+export type OverlayState = {
+  visible: boolean;
+  locked: boolean;
+  clickThroughWhenLocked: boolean;
+  alwaysOnTop: boolean;
+  autoCenter: boolean;
+  refreshRate: number;
+  pixelDetail: "coarse" | "medium" | "fine";
+  opacity: number;
+  appearance: OverlayAppearance;
+  color: string;
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+};
+
+export type OcrRegionState = {
+  visible: boolean;
+  showBorderWhenIdle: boolean;
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+};
+
+export type SubtitleProvider = "openAiResponses" | "ollama";
+export type SubtitleExplainMode = "phrase" | "word";
+export type StyleMode = "default" | "contrast" | "contrastLight";
+export type StatusTone = "idle" | "success" | "error";
+
+export type ProviderConnectionSettings = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
+
+export type SubtitleProviderProfiles = {
+  openAiResponses: ProviderConnectionSettings;
+  ollama: ProviderConnectionSettings;
+};
+
+export type SubtitleExplainSettings = {
+  realtimeEnabled: boolean;
+  provider: SubtitleProvider;
+  explainMode: SubtitleExplainMode;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  providerProfiles: SubtitleProviderProfiles;
+  ocrIntervalMs: number;
+  stableFrames: number;
+  similarityThreshold: number;
+  blankClearMs: number;
+};
+
+export type SubtitlePhrase = {
+  source: string;
+  explanation: string;
+};
+
+export type SubtitleResult = {
+  sourceText: string;
+  translation: string;
+  phrases: SubtitlePhrase[];
+};
+
+export type SubtitleStatus = {
+  analyzing: boolean;
+  stage: string;
+  message: string;
+  error: string | null;
+};
+
+export const FONT_SCALE_VALUES = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] as const;
+
+export type FontScale = (typeof FONT_SCALE_VALUES)[number];
+
+export const DEFAULT_FONT_SCALE: FontScale = FONT_SCALE_VALUES[0];
+
+export const LEGACY_FONT_SCALE_MAP = {
+  normal: "1.0",
+  large: "1.1",
+  xlarge: "1.2",
+} as const;

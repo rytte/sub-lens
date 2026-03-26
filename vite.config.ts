@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // @ts-expect-error process is a nodejs global
@@ -9,10 +10,10 @@ export default defineConfig(async () => ({
   build: {
     rollupOptions: {
       input: {
-        main: resolve(__dirname, "index.html"),
-        settings: resolve(__dirname, "settings.html"),
-        "ocr-region": resolve(__dirname, "ocr-region.html"),
-        "subtitle-explain": resolve(__dirname, "subtitle-explain.html"),
+        main: resolve(__dirname, "pages/overlay.html"),
+        settings: resolve(__dirname, "pages/settings.html"),
+        "ocr-region": resolve(__dirname, "pages/ocr-region.html"),
+        "subtitle-explain": resolve(__dirname, "pages/subtitle-explain.html"),
       },
     },
   },
@@ -32,4 +33,5 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  plugins: [react()],
 }));

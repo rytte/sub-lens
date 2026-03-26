@@ -390,6 +390,7 @@ struct SharedState {
     subtitle_status: SubtitleStatusPayload,
     latest_subtitle_result: Option<SubtitleAnalysisResultPayload>,
     subtitle_job_running: bool,
+    overlay_interaction_until_ms: u128,
     ctrl_pressed: bool,
 }
 
@@ -407,6 +408,7 @@ impl SharedState {
             subtitle_status: SubtitleStatusPayload::default(),
             latest_subtitle_result: None,
             subtitle_job_running: false,
+            overlay_interaction_until_ms: 0,
             ctrl_pressed,
         }
     }
@@ -442,6 +444,13 @@ impl Drop for PythonSidecarProcess {
 }
 
 struct SidecarState(Mutex<Option<PythonSidecarProcess>>);
+
+fn current_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
 
 fn default_base_url(provider: &SubtitleProvider) -> &'static str {
     match provider {
@@ -824,6 +833,12 @@ fn emit_pixel_frame(app: &AppHandle, data_url: String) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
+fn overlay_interaction_active(app: &AppHandle) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.overlay_interaction_until_ms > current_timestamp_ms())
+}
+
 fn emit_ocr_region_state(app: &AppHandle, region: &OcrRegionStatePayload) -> Result<(), String> {
     app.emit(EVENT_OCR_REGION_STATE_CHANGED, region.clone())
         .map_err(|err| err.to_string())
@@ -928,29 +943,32 @@ fn apply_window_state(
     app: &AppHandle,
     overlay: &OverlayStatePayload,
     ctrl_pressed: bool,
+    apply_geometry: bool,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
 
-    window
-        .set_size(LogicalSize::new(overlay.width, overlay.height))
-        .map_err(|err| err.to_string())?;
+    if apply_geometry {
+        window
+            .set_size(LogicalSize::new(overlay.width, overlay.height))
+            .map_err(|err| err.to_string())?;
 
-    if overlay.auto_center {
-        if let Some(position) = centered_horizontal_position(&window, overlay)? {
+        if overlay.auto_center {
+            if let Some(position) = centered_horizontal_position(&window, overlay)? {
+                window
+                    .set_position(position)
+                    .map_err(|err| err.to_string())?;
+            } else {
+                window.center().map_err(|err| err.to_string())?;
+            }
+        } else if let (Some(x), Some(y)) = (overlay.x, overlay.y) {
             window
-                .set_position(position)
+                .set_position(LogicalPosition::new(x, y))
                 .map_err(|err| err.to_string())?;
         } else {
             window.center().map_err(|err| err.to_string())?;
         }
-    } else if let (Some(x), Some(y)) = (overlay.x, overlay.y) {
-        window
-            .set_position(LogicalPosition::new(x, y))
-            .map_err(|err| err.to_string())?;
-    } else {
-        window.center().map_err(|err| err.to_string())?;
     }
 
     window
@@ -983,7 +1001,7 @@ fn ensure_ocr_region_window(app: &AppHandle) -> Result<tauri::WebviewWindow, Str
     let window = WebviewWindowBuilder::new(
         app,
         OCR_REGION_WINDOW_LABEL,
-        WebviewUrl::App("ocr-region.html".into()),
+        WebviewUrl::App("pages/ocr-region.html".into()),
     )
     .title("OCR 区域")
     .inner_size(DEFAULT_OCR_REGION_WIDTH, DEFAULT_OCR_REGION_HEIGHT)
@@ -1008,6 +1026,36 @@ fn ensure_ocr_region_window(app: &AppHandle) -> Result<tauri::WebviewWindow, Str
     Ok(window)
 }
 
+fn ensure_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_min_size(Some(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT)))
+            .map_err(|err| err.to_string())?;
+        return Ok(window);
+    }
+
+    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("pages/overlay.html".into()))
+        .title("字幕遮挡")
+        .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
+        .resizable(true)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .center()
+        .visible(false)
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    disable_window_transitions(&window)?;
+    window
+        .set_min_size(Some(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT)))
+        .map_err(|err| err.to_string())?;
+    Ok(window)
+}
+
 fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
         return Ok(window);
@@ -1016,7 +1064,7 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
     let window = WebviewWindowBuilder::new(
         app,
         SUBTITLE_EXPLAIN_WINDOW_LABEL,
-        WebviewUrl::App("subtitle-explain.html".into()),
+        WebviewUrl::App("pages/subtitle-explain.html".into()),
     )
     .title("字幕解释")
     .inner_size(520.0, 360.0)
@@ -1174,6 +1222,7 @@ fn update_overlay_state<F>(
     app: &AppHandle,
     persist: bool,
     focus_window: bool,
+    apply_geometry: bool,
     updater: F,
 ) -> Result<OverlayStatePayload, String>
 where
@@ -1187,7 +1236,7 @@ where
         (shared.overlay.clone(), shared.ctrl_pressed)
     };
 
-    apply_window_state(app, &overlay, ctrl_pressed)?;
+    apply_window_state(app, &overlay, ctrl_pressed, apply_geometry)?;
 
     if persist {
         save_state(app, &overlay)?;
@@ -1226,25 +1275,25 @@ fn set_ctrl_pressed(app: &AppHandle, ctrl_pressed: bool) -> Result<(), String> {
 }
 
 fn toggle_visibility(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.visible = !shared.overlay.visible;
     })
 }
 
 fn toggle_lock(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.locked = !shared.overlay.locked;
     })
 }
 
 fn toggle_click_through(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.click_through_when_locked = !shared.overlay.click_through_when_locked;
     })
 }
 
 fn reset_overlay_position_inner(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, true, |shared| {
+    update_overlay_state(app, true, true, true, |shared| {
         shared.overlay.visible = true;
         shared.overlay.locked = false;
         shared.overlay.x = None;
@@ -1253,7 +1302,7 @@ fn reset_overlay_position_inner(app: &AppHandle) -> Result<OverlayStatePayload, 
 }
 
 fn toggle_on_top(app: &AppHandle) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.always_on_top = !shared.overlay.always_on_top;
     })
 }
@@ -1265,7 +1314,7 @@ fn toggle_auto_center(app: &AppHandle) -> Result<OverlayStatePayload, String> {
     let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
     let position = window.outer_position().map_err(|err| err.to_string())?;
 
-    update_overlay_state(app, true, false, move |shared| {
+    update_overlay_state(app, true, false, true, move |shared| {
         let next_auto_center = !shared.overlay.auto_center;
         shared.overlay.auto_center = next_auto_center;
 
@@ -1280,13 +1329,13 @@ fn toggle_auto_center(app: &AppHandle) -> Result<OverlayStatePayload, String> {
 }
 
 fn set_opacity(app: &AppHandle, opacity: f64) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.opacity = opacity;
     })
 }
 
 fn set_refresh_rate(app: &AppHandle, refresh_rate: u32) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.refresh_rate = refresh_rate;
     })
 }
@@ -1295,7 +1344,7 @@ fn set_pixel_detail(
     app: &AppHandle,
     pixel_detail: PixelDetail,
 ) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.pixel_detail = pixel_detail;
     })
 }
@@ -1304,14 +1353,14 @@ fn set_appearance(
     app: &AppHandle,
     appearance: OverlayAppearance,
 ) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(app, true, false, |shared| {
+    update_overlay_state(app, true, false, false, |shared| {
         shared.overlay.appearance = appearance;
     })
 }
 
 fn set_color(app: &AppHandle, color: &str) -> Result<OverlayStatePayload, String> {
     let color = color.to_string();
-    update_overlay_state(app, true, false, move |shared| {
+    update_overlay_state(app, true, false, false, move |shared| {
         shared.overlay.color = color;
     })
 }
@@ -1383,7 +1432,7 @@ fn open_more_settings_window(app: &AppHandle) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(
         app,
         SETTINGS_WINDOW_LABEL,
-        WebviewUrl::App("settings.html".into()),
+        WebviewUrl::App("pages/settings.html".into()),
     )
     .title("更多设置")
     .inner_size(640.0, 760.0)
@@ -2473,9 +2522,23 @@ fn apply_overlay_state(
     app: AppHandle,
     next_state: OverlayStatePayload,
 ) -> Result<OverlayStatePayload, String> {
-    update_overlay_state(&app, true, false, move |shared| {
+    update_overlay_state(&app, true, false, true, move |shared| {
         shared.overlay = next_state;
     })
+}
+
+#[tauri::command]
+fn mark_overlay_interacting(app: AppHandle, duration_ms: Option<u64>) -> Result<(), String> {
+    let duration_ms = u128::from(duration_ms.unwrap_or(320).clamp(120, 1200));
+    let state = app.state::<AppState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    let next_deadline = current_timestamp_ms() + duration_ms;
+
+    if next_deadline > shared.overlay_interaction_until_ms {
+        shared.overlay_interaction_until_ms = next_deadline;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2506,6 +2569,10 @@ fn quit_app(app: AppHandle) {
 fn capture_pixelated_frame(app: &AppHandle) -> Result<Option<String>, String> {
     let overlay = current_overlay_state(app)?;
     if !overlay.visible || overlay.appearance != OverlayAppearance::Pixelate {
+        return Ok(None);
+    }
+
+    if overlay_interaction_active(app)? {
         return Ok(None);
     }
 
@@ -2751,12 +2818,9 @@ pub fn run() {
             ))));
             app.manage(SidecarState(Mutex::new(None)));
 
-            if let Some(window) = app.get_webview_window("main") {
-                disable_window_transitions(&window)?;
-            }
-
+            ensure_main_window(app.handle())?;
             ensure_ocr_region_window(app.handle())?;
-            apply_window_state(app.handle(), &overlay, ctrl_pressed)?;
+            apply_window_state(app.handle(), &overlay, ctrl_pressed, true)?;
             apply_ocr_region_window_state(app.handle(), &ocr_region)?;
             emit_state(app.handle(), &overlay)?;
             emit_ocr_region_state(app.handle(), &ocr_region)?;
@@ -2786,6 +2850,7 @@ pub fn run() {
             load_subtitle_status,
             load_latest_subtitle_result,
             apply_overlay_state,
+            mark_overlay_interacting,
             toggle_overlay_visibility,
             toggle_overlay_lock,
             toggle_overlay_on_top,

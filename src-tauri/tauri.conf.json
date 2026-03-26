@@ -11,23 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "字幕遮挡",
-        "width": 720,
-        "height": 132,
-        "minWidth": 280,
-        "minHeight": 36,
-        "resizable": true,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "shadow": false,
-        "center": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
