@@ -41,6 +41,7 @@ const STORE_PATH: &str = "overlay-settings.json";
 const STORE_KEY_OVERLAY: &str = "overlay";
 const STORE_KEY_OCR_REGION: &str = "ocrRegion";
 const STORE_KEY_SUBTITLE_EXPLAIN: &str = "subtitleExplain";
+const STORE_KEY_SUBTITLE_EXPLAIN_WINDOW: &str = "subtitleExplainWindow";
 const TRAY_ID: &str = "overlay-tray";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
 const OCR_REGION_WINDOW_LABEL: &str = "ocr-region";
@@ -53,6 +54,10 @@ const DEFAULT_OCR_REGION_WIDTH: f64 = 720.0;
 const DEFAULT_OCR_REGION_HEIGHT: f64 = 156.0;
 const MIN_OCR_REGION_WIDTH: f64 = 240.0;
 const MIN_OCR_REGION_HEIGHT: f64 = 20.0;
+const DEFAULT_SUBTITLE_EXPLAIN_WINDOW_WIDTH: f64 = 520.0;
+const DEFAULT_SUBTITLE_EXPLAIN_WINDOW_HEIGHT: f64 = 360.0;
+const MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH: f64 = 440.0;
+const MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT: f64 = 300.0;
 const CTRL_HIDE_POLL_INTERVAL_MS: u64 = 16;
 const OCR_CAPTURE_SETTLE_MS: u64 = 320;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
@@ -216,6 +221,17 @@ struct OcrRegionStatePayload {
     y: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+struct SubtitleExplainWindowStatePayload {
+    visible: bool,
+    width: f64,
+    height: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SubtitlePhrasePayload {
@@ -372,6 +388,18 @@ impl Default for OcrRegionStatePayload {
     }
 }
 
+impl Default for SubtitleExplainWindowStatePayload {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            width: DEFAULT_SUBTITLE_EXPLAIN_WINDOW_WIDTH,
+            height: DEFAULT_SUBTITLE_EXPLAIN_WINDOW_HEIGHT,
+            x: None,
+            y: None,
+        }
+    }
+}
+
 impl Default for SubtitleStatusPayload {
     fn default() -> Self {
         Self {
@@ -388,6 +416,7 @@ struct SharedState {
     overlay: OverlayStatePayload,
     ocr_region: OcrRegionStatePayload,
     subtitle_settings: SubtitleExplainSettingsPayload,
+    subtitle_explain_window: SubtitleExplainWindowStatePayload,
     subtitle_status: SubtitleStatusPayload,
     latest_subtitle_result: Option<SubtitleAnalysisResultPayload>,
     subtitle_job_running: bool,
@@ -400,12 +429,14 @@ impl SharedState {
         overlay: OverlayStatePayload,
         ocr_region: OcrRegionStatePayload,
         subtitle_settings: SubtitleExplainSettingsPayload,
+        subtitle_explain_window: SubtitleExplainWindowStatePayload,
         ctrl_pressed: bool,
     ) -> Self {
         Self {
             overlay,
             ocr_region,
             subtitle_settings,
+            subtitle_explain_window,
             subtitle_status: SubtitleStatusPayload::default(),
             latest_subtitle_result: None,
             subtitle_job_running: false,
@@ -687,6 +718,18 @@ fn sanitize_ocr_region_state(mut state: OcrRegionStatePayload) -> OcrRegionState
     state
 }
 
+fn sanitize_subtitle_explain_window_state(
+    mut state: SubtitleExplainWindowStatePayload,
+) -> SubtitleExplainWindowStatePayload {
+    state.width = state
+        .width
+        .max(MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH);
+    state.height = state
+        .height
+        .max(MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT);
+    state
+}
+
 fn effective_ocr_region_visibility(region: &OcrRegionStatePayload) -> bool {
     region.visible || region.show_border_when_idle
 }
@@ -742,6 +785,25 @@ fn load_saved_subtitle_settings(app: &AppHandle) -> SubtitleExplainSettingsPaylo
     sanitize_subtitle_settings(settings)
 }
 
+fn load_saved_subtitle_explain_window_state(
+    app: &AppHandle,
+) -> SubtitleExplainWindowStatePayload {
+    let store = match app.store(STORE_PATH) {
+        Ok(store) => store,
+        Err(_) => return SubtitleExplainWindowStatePayload::default(),
+    };
+
+    let state = store
+        .get(STORE_KEY_SUBTITLE_EXPLAIN_WINDOW)
+        .and_then(|value| {
+            serde_json::from_value::<SubtitleExplainWindowStatePayload>(value).ok()
+        })
+        .unwrap_or_default();
+
+    store.close_resource();
+    sanitize_subtitle_explain_window_state(state)
+}
+
 fn load_saved_ocr_region(app: &AppHandle) -> OcrRegionStatePayload {
     let store = match app.store(STORE_PATH) {
         Ok(store) => store,
@@ -776,6 +838,17 @@ fn save_subtitle_settings(
     Ok(())
 }
 
+fn save_subtitle_explain_window_state(
+    app: &AppHandle,
+    state: &SubtitleExplainWindowStatePayload,
+) -> Result<(), String> {
+    let store = app.store(STORE_PATH).map_err(|err| err.to_string())?;
+    store.set(STORE_KEY_SUBTITLE_EXPLAIN_WINDOW, json!(state));
+    store.save().map_err(|err| err.to_string())?;
+    store.close_resource();
+    Ok(())
+}
+
 fn save_ocr_region(app: &AppHandle, region: &OcrRegionStatePayload) -> Result<(), String> {
     let store = app.store(STORE_PATH).map_err(|err| err.to_string())?;
     let mut persisted = region.clone();
@@ -802,6 +875,74 @@ fn current_subtitle_settings(app: &AppHandle) -> Result<SubtitleExplainSettingsP
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
     Ok(shared.subtitle_settings.clone())
+}
+
+fn sync_overlay_state_from_window(app: &AppHandle) -> Result<OverlayStatePayload, String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return current_overlay_state(app);
+    };
+
+    let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
+    let position = window.outer_position().map_err(|err| err.to_string())?;
+    let size = window.inner_size().map_err(|err| err.to_string())?;
+
+    let overlay = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.overlay.width = f64::from(size.width) / scale_factor;
+        shared.overlay.height = f64::from(size.height) / scale_factor;
+        if shared.overlay.auto_center {
+            shared.overlay.x = None;
+        } else {
+            shared.overlay.x = Some(f64::from(position.x) / scale_factor);
+        }
+        shared.overlay.y = Some(f64::from(position.y) / scale_factor);
+        shared.overlay = sanitize_state(shared.overlay.clone());
+        shared.overlay.clone()
+    };
+
+    save_state(app, &overlay)?;
+    Ok(overlay)
+}
+
+fn sync_subtitle_explain_window_state_from_window(
+    app: &AppHandle,
+    visible_override: Option<bool>,
+) -> Result<SubtitleExplainWindowStatePayload, String> {
+    let window_geometry = if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+        let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
+        let size = window.inner_size().map_err(|err| err.to_string())?;
+        let position = window.outer_position().map_err(|err| err.to_string())?;
+        Some((
+            f64::from(size.width) / scale_factor,
+            f64::from(size.height) / scale_factor,
+            f64::from(position.x) / scale_factor,
+            f64::from(position.y) / scale_factor,
+        ))
+    } else {
+        None
+    };
+
+    let next_state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        if let Some((width, height, x, y)) = window_geometry {
+            shared.subtitle_explain_window.width = width;
+            shared.subtitle_explain_window.height = height;
+            shared.subtitle_explain_window.x = Some(x);
+            shared.subtitle_explain_window.y = Some(y);
+        }
+        if let Some(visible) = visible_override {
+            shared.subtitle_explain_window.visible = visible;
+        }
+        shared.subtitle_explain_window = sanitize_subtitle_explain_window_state(
+            shared.subtitle_explain_window.clone(),
+        );
+        shared.subtitle_explain_window.clone()
+    };
+
+    save_subtitle_explain_window_state(app, &next_state)?;
+    Ok(next_state)
 }
 
 fn current_subtitle_status(app: &AppHandle) -> Result<SubtitleStatusPayload, String> {
@@ -1059,6 +1200,12 @@ fn ensure_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
 
 fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+        window
+            .set_min_size(Some(LogicalSize::new(
+                MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH,
+                MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT,
+            )))
+            .map_err(|err| err.to_string())?;
         return Ok(window);
     }
 
@@ -1068,8 +1215,14 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
         WebviewUrl::App("pages/subtitle-explain.html".into()),
     )
     .title("字幕解释")
-    .inner_size(520.0, 360.0)
-    .min_inner_size(440.0, 300.0)
+    .inner_size(
+        DEFAULT_SUBTITLE_EXPLAIN_WINDOW_WIDTH,
+        DEFAULT_SUBTITLE_EXPLAIN_WINDOW_HEIGHT,
+    )
+    .min_inner_size(
+        MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH,
+        MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT,
+    )
     .resizable(true)
     .decorations(false)
     .transparent(true)
@@ -1081,7 +1234,43 @@ fn ensure_subtitle_explain_window(app: &AppHandle) -> Result<tauri::WebviewWindo
     .map_err(|err| err.to_string())?;
 
     disable_window_transitions(&window)?;
+    window
+        .set_min_size(Some(LogicalSize::new(
+            MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH,
+            MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT,
+        )))
+        .map_err(|err| err.to_string())?;
     Ok(window)
+}
+
+fn apply_subtitle_explain_window_state(
+    app: &AppHandle,
+    state: &SubtitleExplainWindowStatePayload,
+    focus_window: bool,
+) -> Result<(), String> {
+    let window = ensure_subtitle_explain_window(app)?;
+
+    window
+        .set_size(LogicalSize::new(state.width, state.height))
+        .map_err(|err| err.to_string())?;
+
+    if let (Some(x), Some(y)) = (state.x, state.y) {
+        window
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|err| err.to_string())?;
+    }
+
+    if state.visible {
+        let _ = window.unminimize();
+        window.show().map_err(|err| err.to_string())?;
+        if focus_window {
+            window.set_focus().map_err(|err| err.to_string())?;
+        }
+    } else {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn apply_ocr_region_window_state(
@@ -1415,11 +1604,29 @@ fn toggle_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, St
 }
 
 fn open_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
-    let window = ensure_subtitle_explain_window(app)?;
-    let _ = window.unminimize();
-    window.show().map_err(|err| err.to_string())?;
-    window.set_focus().map_err(|err| err.to_string())?;
-    Ok(())
+    let state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.subtitle_explain_window.visible = true;
+        let next_state = sanitize_subtitle_explain_window_state(
+            shared.subtitle_explain_window.clone(),
+        );
+        shared.subtitle_explain_window = next_state.clone();
+        next_state
+    };
+
+    save_subtitle_explain_window_state(app, &state)?;
+    apply_subtitle_explain_window_state(app, &state, true)
+}
+
+fn sync_persisted_window_states(app: &AppHandle) {
+    if let Err(err) = sync_overlay_state_from_window(app) {
+        eprintln!("sync overlay state before exit failed: {err}");
+    }
+
+    if let Err(err) = sync_subtitle_explain_window_state_from_window(app, None) {
+        eprintln!("sync subtitle explain window state before exit failed: {err}");
+    }
 }
 
 fn open_more_settings_window(app: &AppHandle) -> Result<(), String> {
@@ -2430,6 +2637,7 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         MENU_TOGGLE_ON_TOP => toggle_on_top(app),
         MENU_OPEN_MORE_SETTINGS => open_more_settings_menu(app),
         MENU_QUIT => {
+            sync_persisted_window_states(app);
             app.exit(0);
             return;
         }
@@ -2462,6 +2670,12 @@ fn open_more_settings(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_subtitle_explain(app: AppHandle) -> Result<(), String> {
     open_subtitle_explain_window(&app)
+}
+
+#[tauri::command]
+fn hide_subtitle_explain(app: AppHandle) -> Result<(), String> {
+    let state = sync_subtitle_explain_window_state_from_window(&app, Some(false))?;
+    apply_subtitle_explain_window_state(&app, &state, false)
 }
 
 #[tauri::command]
@@ -2499,6 +2713,27 @@ fn load_subtitle_explain_settings(
     app: AppHandle,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
     current_subtitle_settings(&app)
+}
+
+#[tauri::command]
+fn save_subtitle_explain_window_state_command(
+    app: AppHandle,
+    next_state: SubtitleExplainWindowStatePayload,
+) -> Result<SubtitleExplainWindowStatePayload, String> {
+    let next_state = sanitize_subtitle_explain_window_state(next_state);
+    let state = {
+        let state = app.state::<AppState>();
+        let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.subtitle_explain_window.visible = next_state.visible;
+        shared.subtitle_explain_window.width = next_state.width;
+        shared.subtitle_explain_window.height = next_state.height;
+        shared.subtitle_explain_window.x = next_state.x;
+        shared.subtitle_explain_window.y = next_state.y;
+        shared.subtitle_explain_window.clone()
+    };
+
+    save_subtitle_explain_window_state(&app, &state)?;
+    Ok(state)
 }
 
 #[tauri::command]
@@ -2622,6 +2857,7 @@ fn reset_overlay_position(app: AppHandle) -> Result<OverlayStatePayload, String>
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    sync_persisted_window_states(&app);
     app.exit(0);
 }
 
@@ -2868,11 +3104,14 @@ pub fn run() {
             let overlay = load_saved_state(app.handle());
             let ocr_region = load_saved_ocr_region(app.handle());
             let subtitle_settings = load_saved_subtitle_settings(app.handle());
+            let subtitle_explain_window =
+                load_saved_subtitle_explain_window_state(app.handle());
             let ctrl_pressed = current_ctrl_pressed();
             app.manage(AppState(Mutex::new(SharedState::new(
                 overlay.clone(),
                 ocr_region.clone(),
                 subtitle_settings,
+                subtitle_explain_window.clone(),
                 ctrl_pressed,
             ))));
             app.manage(SidecarState(Mutex::new(None)));
@@ -2881,6 +3120,13 @@ pub fn run() {
             ensure_ocr_region_window(app.handle())?;
             apply_window_state(app.handle(), &overlay, ctrl_pressed, true)?;
             apply_ocr_region_window_state(app.handle(), &ocr_region)?;
+            if subtitle_explain_window.visible {
+                apply_subtitle_explain_window_state(
+                    app.handle(),
+                    &subtitle_explain_window,
+                    false,
+                )?;
+            }
             emit_state(app.handle(), &overlay)?;
             emit_ocr_region_state(app.handle(), &ocr_region)?;
             emit_subtitle_status(app.handle(), &SubtitleStatusPayload::default())?;
@@ -2901,6 +3147,7 @@ pub fn run() {
             show_ocr_region,
             hide_ocr_region,
             load_subtitle_explain_settings,
+            save_subtitle_explain_window_state_command,
             load_subtitle_explain_mode,
             save_subtitle_explain_settings,
             save_subtitle_explain_mode,
@@ -2917,6 +3164,7 @@ pub fn run() {
             show_overlay_menu,
             open_more_settings,
             open_subtitle_explain,
+            hide_subtitle_explain,
             analyze_current_subtitle,
             quit_app
         ])

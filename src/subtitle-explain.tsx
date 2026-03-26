@@ -25,6 +25,7 @@ import type {
   StyleMode,
   SubtitleExplainMode,
   SubtitleExplainSettings,
+  SubtitleExplainWindowState,
   SubtitlePhrase,
   SubtitleResult,
   SubtitleStatus,
@@ -221,6 +222,7 @@ export function SubtitleExplainWindow() {
   const sizeSyncFrameRef = useRef(0);
   const sizeSyncTimeoutRef = useRef(0);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const windowStatePersistTimerRef = useRef(0);
 
   useEffect(() => {
     autoHeightEnabledRef.current = autoHeightEnabled;
@@ -351,6 +353,46 @@ export function SubtitleExplainWindow() {
     }
   });
 
+  const persistWindowState = useEffectEvent(async (visible: boolean) => {
+    try {
+      const scaleFactor = await appWindow.scaleFactor();
+      const [size, position] = await Promise.all([
+        appWindow.innerSize(),
+        appWindow.outerPosition(),
+      ]);
+      const logicalSize = size.toLogical(scaleFactor);
+
+      await invoke<SubtitleExplainWindowState>(
+        "save_subtitle_explain_window_state_command",
+        {
+          nextState: {
+            visible,
+            width: logicalSize.width,
+            height: logicalSize.height,
+            x: position.x / scaleFactor,
+            y: position.y / scaleFactor,
+          },
+        },
+      );
+    } catch (error) {
+      console.error("save subtitle explain window state failed:", error);
+    }
+  });
+
+  const scheduleWindowStatePersist = useEffectEvent(
+    (visible: boolean, delay = 160) => {
+      if (windowStatePersistTimerRef.current) {
+        window.clearTimeout(windowStatePersistTimerRef.current);
+        windowStatePersistTimerRef.current = 0;
+      }
+
+      windowStatePersistTimerRef.current = window.setTimeout(() => {
+        windowStatePersistTimerRef.current = 0;
+        void persistWindowState(visible);
+      }, delay);
+    },
+  );
+
   useEffect(() => {
     const cleanupScope = createAsyncCleanupScope();
 
@@ -375,6 +417,18 @@ export function SubtitleExplainWindow() {
         startTransition(() => {
           setResult(payload);
         });
+      }),
+    );
+
+    cleanupScope.register(
+      appWindow.onResized(() => {
+        scheduleWindowStatePersist(true);
+      }),
+    );
+
+    cleanupScope.register(
+      appWindow.onMoved(() => {
+        scheduleWindowStatePersist(true);
       }),
     );
 
@@ -412,10 +466,15 @@ export function SubtitleExplainWindow() {
       });
 
     return () => {
+      if (windowStatePersistTimerRef.current) {
+        window.clearTimeout(windowStatePersistTimerRef.current);
+        windowStatePersistTimerRef.current = 0;
+      }
+
       cancelWindowSizeSync();
       cleanupScope.dispose();
     };
-  }, [cancelWindowSizeSync, syncWindowSizeConstraints]);
+  }, [cancelWindowSizeSync, scheduleWindowStatePersist, syncWindowSizeConstraints]);
 
   useEffect(() => {
     const windowContent = windowContentRef.current;
@@ -566,7 +625,7 @@ export function SubtitleExplainWindow() {
 
   async function hideWindow() {
     try {
-      await appWindow.hide();
+      await invoke("hide_subtitle_explain");
     } catch (error) {
       setSubtitleStatus({
         analyzing: false,

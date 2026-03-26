@@ -38,6 +38,14 @@ export type OcrRegionState = {
   y: number | null;
 };
 
+export type SubtitleExplainWindowState = {
+  visible: boolean;
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+};
+
 export type SubtitleProvider = "openAiResponses" | "ollama";
 export type SubtitleExplainMode = "phrase" | "word";
 export type StyleMode = "default" | "contrast" | "contrastLight";
