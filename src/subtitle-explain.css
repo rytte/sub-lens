@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
   line-height: 1.45;
   background: transparent;
 }
@@ -29,7 +29,9 @@ body {
 }
 
 .subtitle-window,
-button {
+button,
+input,
+output {
   font: inherit;
 }
 
@@ -40,6 +42,7 @@ button {
   --summary-source-size: calc(17px * var(--content-font-scale));
   --phrase-term-size: calc(14px * var(--content-font-scale));
   --phrase-desc-size: calc(13px * var(--content-font-scale));
+  --contrast-outline-shadow: none;
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -812,4 +815,40 @@ button {
 
 .subtitle-window[data-style-mode="contrastLight"] .empty {
   color: rgba(255, 255, 255, 0.5);
+}
+
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] {
+  --contrast-outline-shadow:
+    0.6px 0 0 rgba(255, 255, 255, 0.92),
+    -0.6px 0 0 rgba(255, 255, 255, 0.92),
+    0 0.6px 0 rgba(255, 255, 255, 0.92),
+    0 -0.6px 0 rgba(255, 255, 255, 0.92),
+    0 0 1.2px rgba(255, 255, 255, 0.55);
+}
+
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] {
+  --contrast-outline-shadow:
+    0.6px 0 0 rgba(0, 0, 0, 0.9),
+    -0.6px 0 0 rgba(0, 0, 0, 0.9),
+    0 0.6px 0 rgba(0, 0, 0, 0.9),
+    0 -0.6px 0 rgba(0, 0, 0, 0.9),
+    0 0 1.2px rgba(0, 0, 0, 0.52);
+}
+
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .status-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .summary-label,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .block-title,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .summary-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .phrase-item strong,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .phrase-item span,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .empty,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .status-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .summary-label,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .block-title,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .summary-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .phrase-item strong,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .phrase-item span,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .empty {
+  -webkit-text-stroke: 0 transparent;
+  text-shadow: var(--contrast-outline-shadow);
 }

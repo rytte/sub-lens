@@ -73,6 +73,7 @@ const EVENT_OCR_REGION_STATE_CHANGED = "ocr-region://state";
 const EVENT_SUBTITLE_STATUS_CHANGED = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED = "subtitle://result";
 const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
+const CONTRAST_OUTLINE_STORAGE_KEY = "subtitle-explain-contrast-outline-enabled";
 const FONT_SCALE_STORAGE_KEY = "subtitle-explain-font-scale";
 const AUTO_HEIGHT_STORAGE_KEY = "subtitle-explain-auto-height-enabled";
 const WINDOW_MIN_WIDTH = 360;
@@ -84,6 +85,7 @@ const appWindow = getCurrentWindow();
 let status: SubtitleStatus | null = null;
 let result: SubtitleResult | null = null;
 let styleMode: StyleMode = loadStyleMode();
+let contrastOutlineEnabled = loadContrastOutlineEnabled();
 let fontScale: FontScale = loadFontScale();
 let autoHeightEnabled = loadAutoHeightEnabled();
 let explainMode: ExplainMode = "word";
@@ -170,6 +172,18 @@ app.innerHTML = `
                   </button>
                   <button class="settings-option" type="button" data-setting="styleMode" data-value="contrastLight">
                     白字
+                  </button>
+                </div>
+              </section>
+
+              <section class="settings-group">
+                <p class="settings-group-title">\u5b57\u4f53\u63cf\u8fb9</p>
+                <div class="settings-options">
+                  <button class="settings-option" type="button" data-setting="contrastOutline" data-value="disabled">
+                    \u5173\u95ed
+                  </button>
+                  <button class="settings-option" type="button" data-setting="contrastOutline" data-value="enabled">
+                    \u5f00\u542f
                   </button>
                 </div>
               </section>
@@ -544,6 +558,14 @@ function loadFontScale(): FontScale {
   return DEFAULT_FONT_SCALE;
 }
 
+function loadContrastOutlineEnabled() {
+  try {
+    return window.localStorage.getItem(CONTRAST_OUTLINE_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function loadAutoHeightEnabled() {
   try {
     return window.localStorage.getItem(AUTO_HEIGHT_STORAGE_KEY) === "true";
@@ -554,6 +576,7 @@ function loadAutoHeightEnabled() {
 
 function applyDisplaySettings() {
   windowContent.dataset.styleMode = styleMode;
+  windowContent.dataset.contrastOutline = contrastOutlineEnabled ? "true" : "false";
   windowContent.style.setProperty("--content-font-scale", fontScale);
   windowContent.dataset.hovered =
     styleMode !== "default" && windowHovered ? "true" : "false";
@@ -572,6 +595,8 @@ function syncSettingsOptions() {
     const active =
       (setting === "explainMode" && value === explainMode) ||
       (setting === "styleMode" && value === styleMode) ||
+      (setting === "contrastOutline" &&
+        value === (contrastOutlineEnabled ? "enabled" : "disabled")) ||
       (setting === "autoHeight" &&
         value === (autoHeightEnabled ? "enabled" : "disabled")) ||
       (setting === "ocrBorderMode" &&
@@ -657,6 +682,11 @@ async function applySetting(setting?: string, value?: string) {
   ) {
     styleMode = value;
     persistSetting(STYLE_MODE_STORAGE_KEY, styleMode);
+  }
+
+  if (setting === "contrastOutline" && (value === "enabled" || value === "disabled")) {
+    contrastOutlineEnabled = value === "enabled";
+    persistSetting(CONTRAST_OUTLINE_STORAGE_KEY, String(contrastOutlineEnabled));
   }
 
   if (setting === "autoHeight" && (value === "enabled" || value === "disabled")) {
