@@ -10,7 +10,12 @@ export type OverlayResizeDirection =
   | "SouthWest"
   | "West";
 
-export type HorizontalResizeDirection = "East" | "West";
+export type SubtitleExplainResizeDirection =
+  | "East"
+  | "South"
+  | "SouthEast"
+  | "SouthWest"
+  | "West";
 
 export type OverlayState = {
   visible: boolean;

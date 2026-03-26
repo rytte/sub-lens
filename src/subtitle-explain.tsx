@@ -20,10 +20,10 @@ import {
 } from "./shared/types";
 import type {
   FontScale,
-  HorizontalResizeDirection,
   OcrRegionState,
   StyleMode,
   SubtitleExplainMode,
+  SubtitleExplainResizeDirection,
   SubtitleExplainSettings,
   SubtitleExplainWindowState,
   SubtitlePhrase,
@@ -43,6 +43,17 @@ const WINDOW_MIN_HEIGHT = 140;
 const AUTO_HEIGHT_MAX_WINDOW_HEIGHT = 880;
 const RESIZE_SETTLE_MS = 140;
 const appWindow = getCurrentWindow();
+const RESIZE_HANDLES: Array<{
+  direction: SubtitleExplainResizeDirection;
+  className: string;
+  ariaLabel: string;
+}> = [
+  { direction: "East", className: "east", ariaLabel: "向右拉伸" },
+  { direction: "West", className: "west", ariaLabel: "向左拉伸" },
+  { direction: "South", className: "south", ariaLabel: "向下拉伸" },
+  { direction: "SouthEast", className: "south-east", ariaLabel: "向右下拉伸" },
+  { direction: "SouthWest", className: "south-west", ariaLabel: "向左下拉伸" },
+];
 
 const EXPLAIN_MODE_OPTIONS: Array<{
   value: SubtitleExplainMode;
@@ -556,12 +567,14 @@ export function SubtitleExplainWindow() {
 
   async function handleResizePointerDown(
     event: PointerEvent<HTMLButtonElement>,
-    direction: HorizontalResizeDirection,
+    direction: SubtitleExplainResizeDirection,
   ) {
     if (event.button !== 0) {
       return;
     }
 
+    event.preventDefault();
+    event.stopPropagation();
     await appWindow.startResizeDragging(direction);
   }
 
@@ -767,24 +780,18 @@ export function SubtitleExplainWindow() {
         setWindowHovered(false);
       }}
     >
-      <button
-        className="resize-handle east"
-        data-direction="East"
-        aria-label="向右拉伸"
-        type="button"
-        onPointerDown={(event) => {
-          void handleResizePointerDown(event, "East");
-        }}
-      ></button>
-      <button
-        className="resize-handle west"
-        data-direction="West"
-        aria-label="向左拉伸"
-        type="button"
-        onPointerDown={(event) => {
-          void handleResizePointerDown(event, "West");
-        }}
-      ></button>
+      {RESIZE_HANDLES.map((handle) => (
+        <button
+          key={handle.direction}
+          className={`resize-handle ${handle.className}`}
+          data-direction={handle.direction}
+          aria-label={handle.ariaLabel}
+          type="button"
+          onPointerDown={(event) => {
+            void handleResizePointerDown(event, handle.direction);
+          }}
+        ></button>
+      ))}
 
       <div ref={statusRowRef} className="status-row">
         <div className="status-meta" onPointerDown={handleDragStart}>

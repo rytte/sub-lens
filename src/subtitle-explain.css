@@ -43,6 +43,9 @@ output {
   --phrase-term-size: calc(14px * var(--content-font-scale));
   --phrase-desc-size: calc(13px * var(--content-font-scale));
   --contrast-outline-shadow: none;
+  --resize-edge-thickness: 10px;
+  --resize-corner-size: 24px;
+  --resize-edge-inset: 18px;
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -65,25 +68,51 @@ output {
   position: absolute;
   z-index: 1;
   border: 0;
+  padding: 0;
   background: transparent;
 }
 
 .resize-handle.east,
 .resize-handle.west {
   top: 0;
-  bottom: 0;
+  bottom: var(--resize-edge-inset);
 }
 
 .resize-handle.east {
   right: 0;
-  width: 4px;
+  width: var(--resize-edge-thickness);
   cursor: e-resize;
 }
 
 .resize-handle.west {
   left: 0;
-  width: 10px;
+  width: var(--resize-edge-thickness);
   cursor: w-resize;
+}
+
+.resize-handle.south {
+  left: var(--resize-edge-inset);
+  right: var(--resize-edge-inset);
+  bottom: 0;
+  height: var(--resize-edge-thickness);
+  cursor: s-resize;
+}
+
+.resize-handle.south-east,
+.resize-handle.south-west {
+  bottom: 0;
+  width: var(--resize-corner-size);
+  height: var(--resize-corner-size);
+}
+
+.resize-handle.south-east {
+  right: 0;
+  cursor: se-resize;
+}
+
+.resize-handle.south-west {
+  left: 0;
+  cursor: sw-resize;
 }
 
 .status-row {
