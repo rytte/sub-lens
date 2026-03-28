@@ -52,6 +52,16 @@ const OCR_ENGINE_OPTIONS: Array<{
     description: "使用内置 WebAssembly OCR，不依赖本机安装 tesseract.exe。",
   },
   {
+    value: "easyOcr",
+    label: "EasyOCR",
+    description: "通过 Python sidecar 调用 EasyOCR，适合快速验证多语言识别效果。",
+  },
+  {
+    value: "rapidOcr",
+    label: "RapidOCR",
+    description: "通过 Python sidecar 调用 RapidOCR，启动更轻，适合 CPU 场景。",
+  },
+  {
     value: "paddleOcr",
     label: "PaddleOCR",
     description: "沿用现有 Python sidecar 中的 PaddleOCR 能力。",
@@ -263,6 +273,10 @@ function defaultOcrHint(engine: OcrEngine) {
       return "Windows OCR 依赖系统语言包；如果识别不到目标语言，请先在系统里安装对应 OCR 语言支持。";
     case "tesseract":
       return "Tesseract.js 不需要本地安装可执行文件。首次使用会下载 WASM 与语言数据，自动模式默认会尝试英文、简中、日文、韩文。";
+    case "easyOcr":
+      return "EasyOCR 通过 Python sidecar 运行，首次使用会初始化 PyTorch 与模型，启动时间通常比其它引擎更长。";
+    case "rapidOcr":
+      return "RapidOCR 通过 Python sidecar 运行，通常比 EasyOCR 更轻量，但识别效果会受到默认 ONNX 模型影响。";
     case "paddleOcr":
       return "PaddleOCR 继续通过 Python sidecar 运行，适合保留现有识别链路。";
   }
@@ -575,6 +589,8 @@ export function SettingsWindow() {
         <div className="hero-tags" aria-label="能力范围">
           <span className="tag">Windows OCR</span>
           <span className="tag">Tesseract.js</span>
+          <span className="tag">EasyOCR</span>
+          <span className="tag">RapidOCR</span>
           <span className="tag">PaddleOCR</span>
           <span className="tag">OpenAI Responses</span>
           <span className="tag">Ollama</span>

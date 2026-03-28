@@ -1,4 +1,5 @@
 # Paddlepaddle needs to be installed according to the platform. See https://www.paddleocr.ai/v3.0.2/en/quick_start.html for details.
 numpy<2
+easyocr>=1.7
+rapidocr_onnxruntime>=1.4
 paddleocr>=3.0.0
-

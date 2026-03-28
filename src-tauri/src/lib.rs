@@ -21,6 +21,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -72,6 +74,8 @@ const OCR_CAPTURE_SETTLE_MS: u64 = 320;
 const OCR_RUNTIME_READY_TIMEOUT_MS: u64 = 10_000;
 const OCR_RUNTIME_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 const SUBTITLE_SHORTCUT_ANALYZE: &str = "Ctrl+Shift+J";
 const SUBTITLE_SHORTCUT_EDIT_REGION: &str = "Ctrl+Shift+E";
 
@@ -293,6 +297,8 @@ struct SidecarRequest<'a, T> {
 #[serde(rename_all = "camelCase")]
 struct OcrSubtitleRequest<'a> {
     image_path: &'a str,
+    engine: OcrEngine,
+    language: OcrLanguage,
     allow_empty: bool,
 }
 
@@ -1897,6 +1903,8 @@ fn spawn_python_sidecar(app: &AppHandle) -> Result<PythonSidecarProcess, String>
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        command.creation_flags(CREATE_NO_WINDOW);
 
         match command.spawn() {
             Ok(mut child) => {
@@ -2158,7 +2166,10 @@ fn capture_ocr_region_image(app: &AppHandle, engine: OcrEngine) -> Result<PathBu
 fn preprocess_ocr_image(image: image::RgbaImage, engine: OcrEngine) -> image::RgbaImage {
     match engine {
         OcrEngine::WindowsOcr => preprocess_windows_ocr_image(image),
-        OcrEngine::Tesseract | OcrEngine::PaddleOcr => preprocess_default_ocr_image(image),
+        OcrEngine::Tesseract
+        | OcrEngine::EasyOcr
+        | OcrEngine::RapidOcr
+        | OcrEngine::PaddleOcr => preprocess_default_ocr_image(image),
     }
 }
 
@@ -2250,9 +2261,10 @@ fn subtitle_similarity(left: &str, right: &str) -> f64 {
     1.0 - distance as f64 / max_len as f64
 }
 
-fn run_paddle_ocr_on_image(
+fn run_python_sidecar_ocr_on_image(
     app: &AppHandle,
     image_path: &Path,
+    settings: &OcrSettingsPayload,
     allow_empty: bool,
 ) -> Result<String, String> {
     let image_path_string = image_path.to_string_lossy().to_string();
@@ -2260,6 +2272,8 @@ fn run_paddle_ocr_on_image(
         command: "ocr_subtitle",
         payload: OcrSubtitleRequest {
             image_path: &image_path_string,
+            engine: settings.engine,
+            language: settings.language,
             allow_empty,
         },
     };
@@ -2296,11 +2310,20 @@ fn capture_subtitle_source_text(
         &settings.ocr_settings,
         |engine, image_path, allow_empty| match engine {
             OcrEngine::Tesseract => run_tesseract_js_ocr(app, image_path, &settings.ocr_settings),
-            OcrEngine::PaddleOcr => run_paddle_ocr_on_image(app, image_path, allow_empty),
+            OcrEngine::EasyOcr | OcrEngine::RapidOcr | OcrEngine::PaddleOcr => {
+                run_python_sidecar_ocr_on_image(
+                    app,
+                    image_path,
+                    &settings.ocr_settings,
+                    allow_empty,
+                )
+            }
             OcrEngine::WindowsOcr => Err("当前 OCR 引擎不应走 JS/sidecar 分支。".into()),
         },
     );
-    let _ = fs::remove_file(&image_path);
+    if result.is_ok() {
+        let _ = fs::remove_file(&image_path);
+    }
     result
 }
 

@@ -28,7 +28,11 @@ Python sidecar 位于 `src-tauri/sidecars/subtitle_sidecar.py`。
 pip install -r src-tauri/sidecars/requirements.txt
 ```
 
-此外还需要按平台安装 `paddlepaddle`，可参考 PaddleOCR 官方文档：
+如果要使用 `EasyOCR`，还需要按设备安装与本机匹配的 `torch` / `torchvision`。
+EasyOCR 模型默认缓存到用户缓存目录；如需自定义，可设置 `SUB_LENS_EASYOCR_MODEL_DIR`。
+RapidOCR 模型默认缓存到用户缓存目录；如需自定义，可设置 `SUB_LENS_RAPIDOCR_MODEL_DIR`。
+
+如果要使用 `PaddleOCR`，还需要按平台安装 `paddlepaddle`，可参考 PaddleOCR 官方文档：
 
 - https://www.paddleocr.ai/v3.0.2/en/quick_start.html
 

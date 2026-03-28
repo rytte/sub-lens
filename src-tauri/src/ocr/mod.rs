@@ -9,6 +9,8 @@ mod windows;
 pub enum OcrEngine {
     WindowsOcr,
     Tesseract,
+    EasyOcr,
+    RapidOcr,
     PaddleOcr,
 }
 
@@ -128,6 +130,18 @@ pub fn inspect_engines(_settings: &OcrSettingsPayload) -> Vec<OcrEngineAvailabil
         windows::inspect_availability(),
         tesseract::inspect_availability(),
         OcrEngineAvailabilityPayload {
+            engine: OcrEngine::EasyOcr,
+            label: "EasyOCR".into(),
+            available: true,
+            reason: Some("运行时需要本地 Python、PyTorch 与 EasyOCR 环境。".into()),
+        },
+        OcrEngineAvailabilityPayload {
+            engine: OcrEngine::RapidOcr,
+            label: "RapidOCR".into(),
+            available: true,
+            reason: Some("运行时需要本地 Python 与 RapidOCR ONNX Runtime 环境。".into()),
+        },
+        OcrEngineAvailabilityPayload {
             engine: OcrEngine::PaddleOcr,
             label: "PaddleOCR".into(),
             available: true,
@@ -148,8 +162,8 @@ where
     let raw_text = match settings.engine {
         OcrEngine::WindowsOcr => windows::recognize(image_path, &settings.language, allow_empty)?,
         OcrEngine::Tesseract => external_runner(OcrEngine::Tesseract, image_path, allow_empty)?,
-        OcrEngine::PaddleOcr => {
-            return external_runner(OcrEngine::PaddleOcr, image_path, allow_empty)
+        OcrEngine::EasyOcr | OcrEngine::RapidOcr | OcrEngine::PaddleOcr => {
+            return external_runner(settings.engine, image_path, allow_empty);
         }
     };
 
