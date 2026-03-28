@@ -1111,7 +1111,7 @@ export function SubtitleExplainWindow() {
               void hideWindow();
             }}
           >
-            ×
+            −
           </button>
           <div
             id="collapsedDragRegion"

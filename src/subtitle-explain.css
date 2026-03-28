@@ -501,6 +501,8 @@ output {
 
 .subtitle-window[data-collapsed="true"] .status-meta,
 .subtitle-window[data-collapsed="true"] .settings-menu,
+.subtitle-window[data-collapsed="true"] #staticSelectionButton,
+.subtitle-window[data-collapsed="true"] #drawOcrButton,
 .subtitle-window[data-collapsed="true"] #editOcrButton,
 .subtitle-window[data-collapsed="true"] #realtimeToggleButton,
 .subtitle-window[data-collapsed="true"] #analyzeButton,
