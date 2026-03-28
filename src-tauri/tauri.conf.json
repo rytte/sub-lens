@@ -13,6 +13,10 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$TEMP/sub-lens-capture-*"]
+      },
       "csp": null
     }
   },

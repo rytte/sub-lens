@@ -72,6 +72,7 @@ const MIN_SUBTITLE_EXPLAIN_WINDOW_WIDTH: f64 = 440.0;
 const MIN_SUBTITLE_EXPLAIN_WINDOW_HEIGHT: f64 = 300.0;
 const CTRL_HIDE_POLL_INTERVAL_MS: u64 = 16;
 const OCR_CAPTURE_SETTLE_MS: u64 = 320;
+const STATIC_SELECTION_CAPTURE_SETTLE_MS: u64 = 160;
 const OCR_RUNTIME_READY_TIMEOUT_MS: u64 = 10_000;
 const OCR_RUNTIME_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
@@ -252,13 +253,31 @@ struct OcrRegionStatePayload {
     y: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum OcrRegionDrawMode {
+    SetRegion,
+    AnalyzeStatic,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OcrRegionDrawRequestPayload {
+    mode: OcrRegionDrawMode,
     viewport_x: f64,
     viewport_y: f64,
     viewport_width: f64,
     viewport_height: f64,
+    background_image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrSelectionPayload {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -478,6 +497,7 @@ struct SharedState {
     ocr_region: OcrRegionStatePayload,
     ocr_region_drawing: bool,
     ocr_region_draw_request: Option<OcrRegionDrawRequestPayload>,
+    static_screen_selection: Option<StaticScreenSelectionSession>,
     subtitle_settings: SubtitleExplainSettingsPayload,
     subtitle_explain_window: SubtitleExplainWindowStatePayload,
     subtitle_status: SubtitleStatusPayload,
@@ -500,6 +520,7 @@ impl SharedState {
             ocr_region,
             ocr_region_drawing: false,
             ocr_region_draw_request: None,
+            static_screen_selection: None,
             subtitle_settings,
             subtitle_explain_window,
             subtitle_status: SubtitleStatusPayload::default(),
@@ -946,6 +967,12 @@ fn current_ocr_region_state(app: &AppHandle) -> Result<OcrRegionStatePayload, St
     Ok(shared.ocr_region.clone())
 }
 
+fn current_overlay_restore_state(app: &AppHandle) -> Result<(OverlayStatePayload, bool), String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok((shared.overlay.clone(), shared.ctrl_pressed))
+}
+
 fn is_ocr_region_drawing(app: &AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
@@ -960,14 +987,24 @@ fn current_ocr_region_draw_request(
     Ok(shared.ocr_region_draw_request.clone())
 }
 
+fn take_static_screen_selection_session(
+    app: &AppHandle,
+) -> Result<Option<StaticScreenSelectionSession>, String> {
+    let state = app.state::<AppState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.static_screen_selection.take())
+}
+
 fn start_ocr_region_drawing_session(
     app: &AppHandle,
     draw_request: OcrRegionDrawRequestPayload,
+    static_screen_selection: Option<StaticScreenSelectionSession>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut shared = state.0.lock().map_err(|err| err.to_string())?;
     shared.ocr_region_drawing = true;
     shared.ocr_region_draw_request = Some(draw_request);
+    shared.static_screen_selection = static_screen_selection;
     Ok(())
 }
 
@@ -976,6 +1013,7 @@ fn finish_ocr_region_drawing_session(app: &AppHandle) -> Result<(), String> {
     let mut shared = state.0.lock().map_err(|err| err.to_string())?;
     shared.ocr_region_drawing = false;
     shared.ocr_region_draw_request = None;
+    shared.static_screen_selection = None;
     Ok(())
 }
 
@@ -1203,6 +1241,89 @@ fn capture_target_monitor(
         viewport_width,
         viewport_height,
     ))
+}
+
+fn restore_static_selection_windows_snapshot(
+    app: &AppHandle,
+    overlay: &OverlayStatePayload,
+    ctrl_pressed: bool,
+    ocr_region: &OcrRegionStatePayload,
+    subtitle_explain: &SubtitleExplainWindowStatePayload,
+    settings_was_visible: bool,
+) -> Result<(), String> {
+    apply_window_state(app, overlay, ctrl_pressed, false)?;
+    apply_ocr_region_window_state(app, ocr_region)?;
+    apply_subtitle_explain_window_state(app, subtitle_explain, false)?;
+
+    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
+        if settings_was_visible {
+            let _ = window.unminimize();
+            window.show().map_err(|err| err.to_string())?;
+        } else if window.is_visible().map_err(|err| err.to_string())? {
+            window.hide().map_err(|err| err.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn restore_static_screen_selection_windows(
+    app: &AppHandle,
+    session: &StaticScreenSelectionSession,
+) -> Result<(), String> {
+    restore_static_selection_windows_snapshot(
+        app,
+        &session.overlay,
+        session.ctrl_pressed,
+        &session.ocr_region,
+        &session.subtitle_explain,
+        session.settings_was_visible,
+    )
+}
+
+fn present_ocr_region_draw_request(
+    app: &AppHandle,
+    draw_request: OcrRegionDrawRequestPayload,
+    static_screen_selection: Option<StaticScreenSelectionSession>,
+) -> Result<(), String> {
+    let window = ensure_ocr_region_window(app)?;
+    if window.is_visible().map_err(|err| err.to_string())? {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+
+    start_ocr_region_drawing_session(app, draw_request.clone(), static_screen_selection)?;
+    let result = (|| -> Result<(), String> {
+        window
+            .set_ignore_cursor_events(false)
+            .map_err(|err| err.to_string())?;
+        window
+            .set_size(LogicalSize::new(
+                draw_request.viewport_width,
+                draw_request.viewport_height,
+            ))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_position(LogicalPosition::new(
+                draw_request.viewport_x,
+                draw_request.viewport_y,
+            ))
+            .map_err(|err| err.to_string())?;
+        window
+            .emit(EVENT_OCR_REGION_DRAW_REQUEST, draw_request)
+            .map_err(|err| err.to_string())?;
+        let _ = window.unminimize();
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        let _ = finish_ocr_region_drawing_session(app);
+        let _ = window.hide();
+        return Err(err);
+    }
+
+    Ok(())
 }
 
 fn effective_overlay_visibility(overlay: &OverlayStatePayload, ctrl_pressed: bool) -> bool {
@@ -1775,7 +1896,9 @@ fn set_color(app: &AppHandle, color: &str) -> Result<OverlayStatePayload, String
 }
 
 fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
-    finish_ocr_region_drawing_session(app)?;
+    if is_ocr_region_drawing(app)? {
+        let _ = cancel_ocr_region_drawing_inner(app);
+    }
     let main_window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
@@ -1828,48 +1951,171 @@ fn toggle_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, St
     }
 }
 
+#[derive(Debug)]
+struct StaticScreenSelectionSession {
+    screenshot_path: PathBuf,
+    viewport_width: f64,
+    viewport_height: f64,
+    overlay: OverlayStatePayload,
+    ctrl_pressed: bool,
+    ocr_region: OcrRegionStatePayload,
+    subtitle_explain: SubtitleExplainWindowStatePayload,
+    settings_was_visible: bool,
+}
+
+impl Drop for StaticScreenSelectionSession {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.screenshot_path);
+    }
+}
+
 fn start_ocr_region_drawing_inner(app: &AppHandle) -> Result<(), String> {
+    if is_ocr_region_drawing(app)? {
+        let _ = cancel_ocr_region_drawing_inner(app);
+    }
+
     let main_window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
     let _ = sync_ocr_region_state_from_window(app, None);
     let (_, viewport_x, viewport_y, viewport_width, viewport_height) =
         capture_target_monitor(&main_window)?;
-    let window = ensure_ocr_region_window(app)?;
-    if window.is_visible().map_err(|err| err.to_string())? {
-        window.hide().map_err(|err| err.to_string())?;
-    }
     let draw_request = OcrRegionDrawRequestPayload {
+        mode: OcrRegionDrawMode::SetRegion,
         viewport_x,
         viewport_y,
         viewport_width,
         viewport_height,
+        background_image_path: None,
     };
-    start_ocr_region_drawing_session(app, draw_request.clone())?;
-    window
-        .set_ignore_cursor_events(false)
-        .map_err(|err| err.to_string())?;
-    window
-        .set_size(LogicalSize::new(viewport_width, viewport_height))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(LogicalPosition::new(viewport_x, viewport_y))
-        .map_err(|err| err.to_string())?;
-    window
-        .emit(EVENT_OCR_REGION_DRAW_REQUEST, draw_request)
-        .map_err(|err| err.to_string())?;
-    let _ = window.unminimize();
-    window.show().map_err(|err| err.to_string())?;
-    window.set_focus().map_err(|err| err.to_string())?;
+    present_ocr_region_draw_request(app, draw_request, None)
+}
+
+fn start_static_screen_selection_inner(app: &AppHandle) -> Result<(), String> {
+    if is_ocr_region_drawing(app)? {
+        let _ = cancel_ocr_region_drawing_inner(app);
+    }
+
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "找不到遮挡窗口".to_string())?;
+    let _ = sync_ocr_region_state_from_window(app, None);
+
+    let subtitle_explain = if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL)
+    {
+        let visible = window.is_visible().map_err(|err| err.to_string())?;
+        sync_subtitle_explain_window_state_from_window(app, Some(visible))?
+    } else {
+        current_subtitle_explain_window_state(app)?
+    };
+    let ocr_region = current_ocr_region_state(app)?;
+    let (overlay, ctrl_pressed) = current_overlay_restore_state(app)?;
+    let settings_was_visible = if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL)
+    {
+        window.is_visible().map_err(|err| err.to_string())?
+    } else {
+        false
+    };
+    let (monitor, viewport_x, viewport_y, viewport_width, viewport_height) =
+        capture_target_monitor(&main_window)?;
+
+    let capture_result = (|| -> Result<(PathBuf, String), String> {
+        if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
+            if window.is_visible().map_err(|err| err.to_string())? {
+                window.hide().map_err(|err| err.to_string())?;
+            }
+        }
+        if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+            if window.is_visible().map_err(|err| err.to_string())? {
+                window.hide().map_err(|err| err.to_string())?;
+            }
+        }
+        if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
+            if window.is_visible().map_err(|err| err.to_string())? {
+                window.hide().map_err(|err| err.to_string())?;
+            }
+        }
+        if main_window.is_visible().map_err(|err| err.to_string())? {
+            main_window.hide().map_err(|err| err.to_string())?;
+        }
+
+        thread::sleep(Duration::from_millis(
+            STATIC_SELECTION_CAPTURE_SETTLE_MS,
+        ));
+
+        let image = capture_monitor_image(&monitor)?;
+        let screenshot_path = save_static_screen_capture(image)?;
+        let background_image_path = screenshot_path.to_string_lossy().to_string();
+        Ok((screenshot_path, background_image_path))
+    })();
+
+    let (screenshot_path, background_image_path) = match capture_result {
+        Ok(result) => result,
+        Err(err) => {
+            let _ = restore_static_selection_windows_snapshot(
+                app,
+                &overlay,
+                ctrl_pressed,
+                &ocr_region,
+                &subtitle_explain,
+                settings_was_visible,
+            );
+            return Err(err);
+        }
+    };
+
+    let overlay_restore = overlay.clone();
+    let ocr_region_restore = ocr_region.clone();
+    let subtitle_explain_restore = subtitle_explain.clone();
+    let session = StaticScreenSelectionSession {
+        screenshot_path,
+        viewport_width,
+        viewport_height,
+        overlay,
+        ctrl_pressed,
+        ocr_region,
+        subtitle_explain,
+        settings_was_visible,
+    };
+    let draw_request = OcrRegionDrawRequestPayload {
+        mode: OcrRegionDrawMode::AnalyzeStatic,
+        viewport_x,
+        viewport_y,
+        viewport_width,
+        viewport_height,
+        background_image_path: Some(background_image_path),
+    };
+
+    if let Err(err) = present_ocr_region_draw_request(app, draw_request, Some(session)) {
+        let _ = restore_static_selection_windows_snapshot(
+            app,
+            &overlay_restore,
+            ctrl_pressed,
+            &ocr_region_restore,
+            &subtitle_explain_restore,
+            settings_was_visible,
+        );
+        return Err(err);
+    }
 
     Ok(())
 }
 
 fn cancel_ocr_region_drawing_inner(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
     let state = current_ocr_region_state(app)?;
+    let static_session = take_static_screen_selection_session(app)?;
     finish_ocr_region_drawing_session(app)?;
-    apply_ocr_region_window_state(app, &state)?;
-    if state.visible {
+    if let Some(session) = static_session.as_ref() {
+        restore_static_screen_selection_windows(app, session)?;
+        if session.subtitle_explain.visible {
+            if let Some(window) = app.get_webview_window(SUBTITLE_EXPLAIN_WINDOW_LABEL) {
+                let _ = window.set_focus();
+            }
+        }
+    } else {
+        apply_ocr_region_window_state(app, &state)?;
+    }
+    if state.visible && static_session.is_none() {
         if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
             let _ = window.set_focus();
         }
@@ -2243,8 +2489,81 @@ fn timestamp_millis() -> u128 {
         .unwrap_or_default()
 }
 
+fn temp_capture_path_with_extension(extension: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "sub-lens-capture-{}.{}",
+        timestamp_millis(),
+        extension.trim_start_matches('.')
+    ))
+}
+
 fn temp_capture_path() -> PathBuf {
-    std::env::temp_dir().join(format!("sub-lens-capture-{}.png", timestamp_millis()))
+    temp_capture_path_with_extension("png")
+}
+
+fn temp_static_screen_capture_path() -> PathBuf {
+    temp_capture_path_with_extension("bmp")
+}
+
+fn capture_monitor_image(monitor: &Monitor) -> Result<image::RgbaImage, String> {
+    let width = monitor.width().map_err(|err| err.to_string())?;
+    let height = monitor.height().map_err(|err| err.to_string())?;
+    monitor
+        .capture_region(0, 0, width, height)
+        .map_err(|err| err.to_string())
+}
+
+fn save_static_screen_capture(image: image::RgbaImage) -> Result<PathBuf, String> {
+    let path = temp_static_screen_capture_path();
+    DynamicImage::ImageRgba8(image)
+        .save_with_format(&path, ImageFormat::Bmp)
+        .map_err(|err| err.to_string())?;
+    Ok(path)
+}
+
+fn save_processed_ocr_capture(image: image::RgbaImage, engine: OcrEngine) -> Result<PathBuf, String> {
+    let processed = preprocess_ocr_image(image, engine);
+    let path = temp_capture_path();
+    DynamicImage::ImageRgba8(processed)
+        .save(&path)
+        .map_err(|err| err.to_string())?;
+    Ok(path)
+}
+
+fn crop_static_selection_image(
+    session: &StaticScreenSelectionSession,
+    selection: &OcrSelectionPayload,
+    engine: OcrEngine,
+) -> Result<PathBuf, String> {
+    let screenshot = image::open(&session.screenshot_path)
+        .map_err(|err| format!("读取静态屏幕截图失败：{err}"))?;
+    let image_width = screenshot.width();
+    let image_height = screenshot.height();
+    if image_width == 0 || image_height == 0 {
+        return Err("静态屏幕截图为空，无法裁剪。".into());
+    }
+
+    let scale_x = f64::from(image_width) / session.viewport_width.max(1.0);
+    let scale_y = f64::from(image_height) / session.viewport_height.max(1.0);
+    let left = (selection.x.max(0.0) * scale_x).floor() as u32;
+    let top = (selection.y.max(0.0) * scale_y).floor() as u32;
+    let right = ((selection.x + selection.width).max(0.0) * scale_x).ceil() as u32;
+    let bottom = ((selection.y + selection.height).max(0.0) * scale_y).ceil() as u32;
+
+    let clamped_left = left.min(image_width.saturating_sub(1));
+    let clamped_top = top.min(image_height.saturating_sub(1));
+    let clamped_right = right.max(clamped_left + 1).min(image_width);
+    let clamped_bottom = bottom.max(clamped_top + 1).min(image_height);
+    let cropped = screenshot
+        .crop_imm(
+            clamped_left,
+            clamped_top,
+            clamped_right.saturating_sub(clamped_left).max(1),
+            clamped_bottom.saturating_sub(clamped_top).max(1),
+        )
+        .to_rgba8();
+
+    save_processed_ocr_capture(cropped, engine)
 }
 
 fn capture_ocr_region_image(app: &AppHandle, engine: OcrEngine) -> Result<PathBuf, String> {
@@ -2274,12 +2593,7 @@ fn capture_ocr_region_image(app: &AppHandle, engine: OcrEngine) -> Result<PathBu
         let image = monitor
             .capture_region(capture_x, capture_y, capture_width, capture_height)
             .map_err(|err| err.to_string())?;
-        let processed = preprocess_ocr_image(image, engine);
-        let path = temp_capture_path();
-        DynamicImage::ImageRgba8(processed)
-            .save(&path)
-            .map_err(|err| err.to_string())?;
-        Ok(path)
+        save_processed_ocr_capture(image, engine)
     })();
 
     if region.visible {
@@ -2426,14 +2740,14 @@ fn explain_subtitle_text(
     with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request)
 }
 
-fn capture_subtitle_source_text(
+fn recognize_subtitle_source_text_from_image_path(
     app: &AppHandle,
     settings: &SubtitleExplainSettingsPayload,
+    image_path: &Path,
     allow_empty: bool,
 ) -> Result<String, String> {
-    let image_path = capture_ocr_region_image(app, settings.ocr_settings.engine)?;
-    let result = recognize_text(
-        &image_path,
+    recognize_text(
+        image_path,
         allow_empty,
         &settings.ocr_settings,
         |engine, image_path, allow_empty| match engine {
@@ -2448,7 +2762,16 @@ fn capture_subtitle_source_text(
             }
             OcrEngine::WindowsOcr => Err("当前 OCR 引擎不应走 JS/sidecar 分支。".into()),
         },
-    );
+    )
+}
+
+fn capture_subtitle_source_text(
+    app: &AppHandle,
+    settings: &SubtitleExplainSettingsPayload,
+    allow_empty: bool,
+) -> Result<String, String> {
+    let image_path = capture_ocr_region_image(app, settings.ocr_settings.engine)?;
+    let result = recognize_subtitle_source_text_from_image_path(app, settings, &image_path, allow_empty);
     if result.is_ok() {
         let _ = fs::remove_file(&image_path);
     }
@@ -2617,6 +2940,66 @@ fn run_subtitle_analysis_blocking(
         }
         Err(err) => {
             let _ = set_subtitle_status(app, false, "error", "字幕解析失败。", Some(err.clone()));
+            Err(err)
+        }
+    }
+}
+
+fn run_static_screen_selection_analysis_blocking(
+    app: &AppHandle,
+    selection: OcrSelectionPayload,
+) -> Result<SubtitleAnalysisResultPayload, String> {
+    let static_session = take_static_screen_selection_session(app)?
+        .ok_or_else(|| "当前没有待处理的静态划词会话。".to_string())?;
+    finish_ocr_region_drawing_session(app)?;
+    restore_static_screen_selection_windows(app, &static_session)?;
+
+    let _job_guard = match try_acquire_subtitle_job(app)? {
+        Some(guard) => guard,
+        None => {
+            let message = "已有一条字幕正在解析中，请稍后再试。".to_string();
+            let _ = set_subtitle_status(app, false, "error", "静态划词提交失败。", Some(message.clone()));
+            return Err(message);
+        }
+    };
+    let settings = current_subtitle_settings(app)?;
+
+    open_subtitle_explain_window(app)?;
+    set_subtitle_status(app, true, "capture", "正在识别划词区域文本...", None)?;
+
+    let image_path = match crop_static_selection_image(
+        &static_session,
+        &selection,
+        settings.ocr_settings.engine,
+    ) {
+        Ok(image_path) => image_path,
+        Err(err) => {
+            let _ = set_subtitle_status(app, false, "error", "裁剪静态选区失败。", Some(err.clone()));
+            return Err(err);
+        }
+    };
+    let source_text = match recognize_subtitle_source_text_from_image_path(app, &settings, &image_path, false) {
+        Ok(source_text) => {
+            let _ = fs::remove_file(&image_path);
+            source_text
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&image_path);
+            let _ = set_subtitle_status(app, false, "error", "识别划词区域失败。", Some(err.clone()));
+            return Err(err);
+        }
+    };
+
+    set_subtitle_status(app, true, "llm", "正在解析划词内容...", None)?;
+
+    match explain_subtitle_text(app, &settings, &source_text) {
+        Ok(result) => {
+            let result = set_subtitle_result(app, result)?;
+            set_subtitle_status(app, false, "done", "划词翻译完成。", None)?;
+            Ok(result)
+        }
+        Err(err) => {
+            let _ = set_subtitle_status(app, false, "error", "划词翻译失败。", Some(err.clone()));
             Err(err)
         }
     }
@@ -3148,6 +3531,11 @@ fn start_ocr_region_drawing(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn start_static_screen_selection(app: AppHandle) -> Result<(), String> {
+    start_static_screen_selection_inner(&app)
+}
+
+#[tauri::command]
 fn cancel_ocr_region_drawing(app: AppHandle) -> Result<OcrRegionStatePayload, String> {
     cancel_ocr_region_drawing_inner(&app)
 }
@@ -3341,6 +3729,18 @@ async fn analyze_current_subtitle(app: AppHandle) -> Result<SubtitleAnalysisResu
     tauri::async_runtime::spawn_blocking(move || run_subtitle_analysis_blocking(&app))
         .await
         .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn submit_static_screen_selection(
+    app: AppHandle,
+    selection: OcrSelectionPayload,
+) -> Result<SubtitleAnalysisResultPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_static_screen_selection_analysis_blocking(&app, selection)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -3686,6 +4086,7 @@ pub fn run() {
             show_ocr_region,
             hide_ocr_region,
             start_ocr_region_drawing,
+            start_static_screen_selection,
             cancel_ocr_region_drawing,
             load_subtitle_explain_settings,
             save_subtitle_explain_window_state_command,
@@ -3711,6 +4112,7 @@ pub fn run() {
             open_subtitle_explain,
             hide_subtitle_explain,
             analyze_current_subtitle,
+            submit_static_screen_selection,
             quit_app
         ])
         .run(tauri::generate_context!())

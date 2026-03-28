@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
@@ -30,10 +30,12 @@ const RESIZE_HANDLES: Array<{
 ];
 
 type OcrRegionDrawRequest = {
+  mode: "setRegion" | "analyzeStatic";
   viewportX: number;
   viewportY: number;
   viewportWidth: number;
   viewportHeight: number;
+  backgroundImagePath: string | null;
 };
 
 type DrawPoint = {
@@ -72,6 +74,7 @@ export function OcrRegionWindow() {
   const stateRef = useRef<OcrRegionState | null>(null);
   const drawRequestRef = useRef<OcrRegionDrawRequest | null>(null);
   const drawRequestFetchPendingRef = useRef(false);
+  const drawSubmissionPendingRef = useRef(false);
   const geometryTimerRef = useRef<number | null>(null);
   const drawOriginRef = useRef<DrawPoint | null>(null);
   const drawPointerIdRef = useRef<number | null>(null);
@@ -95,7 +98,7 @@ export function OcrRegionWindow() {
   const persistState = useEffectEvent(async () => {
     const currentState = stateRef.current;
 
-    if (!currentState || drawRequestRef.current) {
+    if (!currentState || drawRequestRef.current || drawSubmissionPendingRef.current) {
       return;
     }
 
@@ -144,7 +147,11 @@ export function OcrRegionWindow() {
   });
 
   const ensureDrawingSession = useEffectEvent(async () => {
-    if (drawRequestRef.current || drawRequestFetchPendingRef.current) {
+    if (
+      drawRequestRef.current ||
+      drawRequestFetchPendingRef.current ||
+      drawSubmissionPendingRef.current
+    ) {
       return;
     }
 
@@ -184,6 +191,18 @@ export function OcrRegionWindow() {
     }
 
     try {
+      if (currentDrawRequest.mode === "analyzeStatic") {
+        drawSubmissionPendingRef.current = true;
+        resetDrawingSession();
+        await invoke("submit_static_screen_selection", {
+          selection: nextDrawRect,
+        });
+        const latestState = await invoke<OcrRegionState>("load_ocr_region_state");
+        stateRef.current = latestState;
+        setState(latestState);
+        return;
+      }
+
       const currentState =
         stateRef.current ?? (await invoke<OcrRegionState>("load_ocr_region_state"));
       const savedState = await invoke<OcrRegionState>("apply_ocr_region_state", {
@@ -201,7 +220,20 @@ export function OcrRegionWindow() {
       setState(savedState);
       resetDrawingSession();
     } catch (error) {
+      if (currentDrawRequest.mode === "analyzeStatic") {
+        try {
+          const latestState = await invoke<OcrRegionState>("load_ocr_region_state");
+          stateRef.current = latestState;
+          setState(latestState);
+        } catch (stateError) {
+          console.error("reload ocr region state after static submit failed:", stateError);
+        }
+      }
       console.error("finish ocr region drawing failed:", error);
+    } finally {
+      if (currentDrawRequest.mode === "analyzeStatic") {
+        drawSubmissionPendingRef.current = false;
+      }
     }
   });
 
@@ -290,7 +322,7 @@ export function OcrRegionWindow() {
   }, [beginDrawingSession, cancelDrawing, ensureDrawingSession, scheduleGeometrySync]);
 
   useEffect(() => {
-    if (!state || drawRequest) {
+    if (!state || drawRequest || drawSubmissionPendingRef.current) {
       return;
     }
 
@@ -419,9 +451,16 @@ export function OcrRegionWindow() {
         height: drawRect.height,
       } as CSSProperties)
     : undefined;
+  const drawIdleLabel =
+    drawRequest?.mode === "analyzeStatic"
+      ? "按住鼠标左键拖拽划词翻译，松开后直接识别解析，右键或 Esc 取消"
+      : "按住鼠标左键拖拽选择 OCR 区域，右键或 Esc 取消";
   const drawSizeLabel = drawRect
     ? `${Math.round(drawRect.width)} × ${Math.round(drawRect.height)}`
-    : "按住鼠标左键拖拽选择 OCR 区域，右键或 Esc 取消";
+    : drawIdleLabel;
+  const drawBackgroundSrc = drawRequest?.backgroundImagePath
+    ? convertFileSrc(drawRequest.backgroundImagePath)
+    : null;
 
   if (drawRequest) {
     return (
@@ -434,6 +473,14 @@ export function OcrRegionWindow() {
           onPointerUp={handleDrawingPointerUp}
           onPointerCancel={handleDrawingPointerCancel}
         >
+          {drawBackgroundSrc ? (
+            <img
+              className="drawing-background"
+              src={drawBackgroundSrc}
+              alt=""
+              draggable={false}
+            />
+          ) : null}
           <div className="drawing-hint">{drawSizeLabel}</div>
           {drawRect ? <div className="drawing-box" style={drawRectStyle}></div> : null}
         </section>

@@ -676,6 +676,19 @@ export function SubtitleExplainWindow() {
     }
   }
 
+  async function startStaticScreenSelection() {
+    try {
+      await invoke("start_static_screen_selection");
+    } catch (error) {
+      setSubtitleStatus({
+        analyzing: false,
+        stage: "error",
+        message: "进入划词翻译失败。",
+        error: String(error),
+      });
+    }
+  }
+
   async function applySetting(setting: string, value: string) {
     if (setting === "explainMode" && (value === "phrase" || value === "word")) {
       const previousMode = explainMode;
@@ -831,6 +844,16 @@ export function SubtitleExplainWindow() {
           </span>
         </div>
         <div className="action-row">
+          <button
+            id="staticSelectionButton"
+            className="action-button"
+            type="button"
+            onClick={() => {
+              void startStaticScreenSelection();
+            }}
+          >
+            划词翻译
+          </button>
           <button
             id="drawOcrButton"
             className="action-button"
