@@ -10,6 +10,7 @@ import tempfile
 import sys
 import time
 import traceback
+import unicodedata
 import urllib.error
 import urllib.request
 import zipfile
@@ -23,7 +24,7 @@ SCHEMA: dict[str, Any] = {
         "translation": {"type": "string"},
         "phrases": {
             "type": "array",
-            "maxItems": 12,
+            "maxItems": 18,
             "items": {
                 "type": "object",
                 "properties": {
@@ -42,27 +43,91 @@ SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-def build_system_prompt(explain_mode: str) -> str:
-    if explain_mode == "word":
-        return """你是一个字幕学习助手。
-你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
-要求：
-1. translation：给出自然、简洁的整句中文翻译。
-2. phrases：按原句顺序，尽量逐词或逐个语法成分拆开解释，最多输出 12 项。
-3. 请优先拆出单词、助词、时态变化、固定搭配中的关键组成部分，而不是只挑宽泛短语。
-4. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。
-5. explanation 用简体中文，简洁说明词义、语法作用或在句中的含义。
-6. 如果原句是日语等不以空格分词的语言，需要主动完成合理切分。
-7. 所有内容使用简体中文，不要输出任何 JSON 之外的文字。"""
+TRIMMABLE_EDGE_PUNCTUATION = frozenset(
+    "\"'“”‘’「」『』【】[]{}〈〉《》〔〕…！？!?,.;:，、。；：·"
+)
 
-    return """你是一个字幕学习助手。
-你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。
-要求：
-1. translation：给出自然、简洁的整句中文翻译。
-2. phrases：挑 0~12 个关键短语或搭配，逐个用中文解释。
-3. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。
-4. 所有内容使用简体中文。
-5. 不要输出任何 JSON 之外的文字。"""
+
+def contains_japanese_kana(text: str) -> bool:
+    for char in text:
+        codepoint = ord(char)
+        if 0x3040 <= codepoint <= 0x30FF or 0x31F0 <= codepoint <= 0x31FF:
+            return True
+    return False
+
+
+def should_apply_japanese_rules(language: str, source_text: str) -> bool:
+    normalized_language = language.strip() or "auto"
+    return normalized_language == "ja" or contains_japanese_kana(source_text)
+
+
+def trim_phrase_edge_punctuation(text: str) -> str:
+    value = text.strip()
+    while value and value[0] in TRIMMABLE_EDGE_PUNCTUATION:
+        value = value[1:].lstrip()
+    while value and value[-1] in TRIMMABLE_EDGE_PUNCTUATION:
+        value = value[:-1].rstrip()
+    return value
+
+
+def is_punctuation_only(text: str) -> bool:
+    if not text:
+        return True
+
+    for char in text:
+        if char.isspace():
+            continue
+        if not unicodedata.category(char).startswith("P"):
+            return False
+    return True
+
+
+def normalize_phrase_source(source: str, *, japanese_mode: bool) -> str:
+    value = source.strip().replace("（", "(").replace("）", ")")
+    value = trim_phrase_edge_punctuation(value)
+
+    if japanese_mode:
+        value = value.replace(" (", "(").replace("( ", "(").replace(" )", ")")
+
+    return value.strip()
+
+
+def build_system_prompt(explain_mode: str, *, japanese_mode: bool) -> str:
+    if explain_mode == "word":
+        rules = [
+            "你是一个字幕学习助手。",
+            "你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。",
+            "要求：",
+            "1. translation：给出自然、简洁的整句中文翻译。",
+            "2. phrases：按原句顺序，尽量逐词或逐个语法成分拆开解释，最多输出 18 项。",
+            "3. 请优先拆出单词、助词、时态变化、固定搭配中的关键组成部分，而不是只挑宽泛短语。",
+            "4. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。",
+            "5. explanation 用简体中文，简洁说明词义、语法作用或在句中的含义。",
+            "6. 如果原句是日语等不以空格分词的语言，需要主动完成合理切分。",
+            "7. 忽略标点符号，不要把任何标点符号单独作为 phrases 项；如果条目首尾带标点，去掉标点后再解释。",
+            "8. 所有内容使用简体中文，不要输出任何 JSON 之外的文字。",
+        ]
+    else:
+        rules = [
+            "你是一个字幕学习助手。",
+            "你会收到一行 OCR 后的字幕文本，请输出严格符合 JSON Schema 的中文解释结果。",
+            "要求：",
+            "1. translation：给出自然、简洁的整句中文翻译。",
+            "2. phrases：挑 0~18 个关键短语或搭配，逐个用中文解释。",
+            "3. phrases 中每一项必须使用 source 和 explanation 作为字段名，不要使用其他键名。",
+            "4. 忽略标点符号，不要把任何标点符号单独作为 phrases 项；如果条目首尾带标点，去掉标点后再解释。",
+            "5. 所有内容使用简体中文。",
+            "6. 不要输出任何 JSON 之外的文字。",
+        ]
+
+    if japanese_mode:
+        rules.append(
+            "9. 如果原句是日语，phrases 中凡是带汉字的 source，都要用半角小括号标注对应假名，例如 学校(がっこう)。"
+            if explain_mode == "word"
+            else "7. 如果原句是日语，phrases 中凡是带汉字的 source，都要用半角小括号标注对应假名，例如 学校(がっこう)。"
+        )
+
+    return "\n".join(rules)
 
 ocr_instances: dict[str, Any] = {}
 easyocr_download_patched = False
@@ -759,15 +824,29 @@ def extract_ocr_text(
     raise RuntimeError(f"Python sidecar 不支持的 OCR 引擎：{engine}")
 
 
-def build_user_prompt(source_text: str, explain_mode: str) -> str:
+def subtitle_explain_language(settings: dict[str, Any]) -> str:
+    ocr_settings = settings.get("ocrSettings") or {}
+    return str(ocr_settings.get("language") or "auto").strip() or "auto"
+
+
+def build_user_prompt(source_text: str, explain_mode: str, *, japanese_mode: bool) -> str:
     if explain_mode == "word":
-        return (
+        prompt = (
             "请解释下面这句字幕，并尽量按原句顺序逐词或逐个语法成分拆开说明，"
-            "严格按约定 JSON 输出。\n\n"
-            f"字幕：{source_text}"
+            "严格按约定 JSON 输出。"
+        )
+    else:
+        prompt = "请解释下面这句字幕，并严格按约定 JSON 输出。"
+
+    extra_requirements = [
+        "忽略标点符号，不要解释单独的标点。",
+    ]
+    if japanese_mode:
+        extra_requirements.append(
+            "如果是日语，带汉字的 source 请用半角小括号标注假名，例如 学校(がっこう)。"
         )
 
-    return f"请解释下面这句字幕，并严格按约定 JSON 输出。\n\n字幕：{source_text}"
+    return f"{prompt}\n" + "\n".join(extra_requirements) + f"\n\n字幕：{source_text}"
 
 
 def extract_openai_output_text(response: dict[str, Any]) -> str:
@@ -804,16 +883,32 @@ def call_openai(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
         raise RuntimeError("OpenAI Responses 需要 API Key。")
 
     explain_mode = str(settings.get("explainMode") or "phrase")
+    language = subtitle_explain_language(settings)
+    japanese_mode = should_apply_japanese_rules(language, source_text)
     payload = {
         "model": settings["model"],
         "input": [
             {
                 "role": "system",
-                "content": [{"type": "input_text", "text": build_system_prompt(explain_mode)}],
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_system_prompt(explain_mode, japanese_mode=japanese_mode),
+                    }
+                ],
             },
             {
                 "role": "user",
-                "content": [{"type": "input_text", "text": build_user_prompt(source_text, explain_mode)}],
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_user_prompt(
+                            source_text,
+                            explain_mode,
+                            japanese_mode=japanese_mode,
+                        ),
+                    }
+                ],
             },
         ],
         "text": {
@@ -842,11 +937,23 @@ def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
         headers["Authorization"] = f"Bearer {api_key}"
 
     explain_mode = str(settings.get("explainMode") or "phrase")
+    language = subtitle_explain_language(settings)
+    japanese_mode = should_apply_japanese_rules(language, source_text)
     payload = {
         "model": settings["model"],
         "messages": [
-            {"role": "system", "content": build_system_prompt(explain_mode)},
-            {"role": "user", "content": build_user_prompt(source_text, explain_mode)},
+            {
+                "role": "system",
+                "content": build_system_prompt(explain_mode, japanese_mode=japanese_mode),
+            },
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    source_text,
+                    explain_mode,
+                    japanese_mode=japanese_mode,
+                ),
+            },
         ],
         "stream": False,
         "think": False,
@@ -867,7 +974,10 @@ def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
 def normalize_result(
     source_text: str,
     llm_output: dict[str, Any],
+    *,
+    language: str,
 ) -> dict[str, Any]:
+    japanese_mode = should_apply_japanese_rules(language, source_text)
     phrases = []
     for item in llm_output.get("phrases") or []:
         if not isinstance(item, dict):
@@ -886,13 +996,14 @@ def normalize_result(
             or item.get("translation")
             or ""
         ).strip()
-        if source and explanation:
+        source = normalize_phrase_source(source, japanese_mode=japanese_mode)
+        if source and explanation and not is_punctuation_only(source):
             phrases.append({"source": source, "explanation": explanation})
 
     return {
         "sourceText": source_text,
         "translation": str(llm_output.get("translation") or "").strip(),
-        "phrases": phrases[:12],
+        "phrases": phrases[:18],
     }
 
 
@@ -928,7 +1039,11 @@ def explain_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         raise RuntimeError(f"不支持的 provider：{provider}")
 
-    return normalize_result(source_text, llm_output)
+    return normalize_result(
+        source_text,
+        llm_output,
+        language=subtitle_explain_language(settings),
+    )
 
 
 def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
