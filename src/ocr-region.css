@@ -30,6 +30,10 @@ button {
   padding: 0;
 }
 
+.region-shell[data-mode="drawing"] {
+  background: rgba(0, 0, 0, 0.01);
+}
+
 .region {
   position: relative;
   width: 100%;
@@ -42,6 +46,42 @@ button {
   overflow: hidden;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   cursor: move;
+}
+
+.drawing-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.01);
+  touch-action: none;
+}
+
+.drawing-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 2;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  background: rgba(8, 12, 18, 0.7);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.drawing-box {
+  position: absolute;
+  border: 1px solid rgba(126, 190, 255, 0.98);
+  border-radius: 0;
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.24) inset,
+    0 0 0 1px rgba(45, 122, 255, 0.32);
 }
 
 .region[data-editing="false"][data-show-border-when-idle="true"] {

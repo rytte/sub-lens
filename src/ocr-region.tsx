@@ -2,13 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { PointerEvent } from "react";
+import type { CSSProperties, MouseEvent, PointerEvent } from "react";
 
 import { createAsyncCleanupScope } from "./shared/async-cleanup";
 import { mountWindowApp } from "./main";
 import type { OcrRegionState, OverlayResizeDirection } from "./shared/types";
 
 const EVENT_OCR_REGION_STATE_CHANGED = "ocr-region://state";
+const EVENT_OCR_REGION_DRAW_REQUEST = "ocr-region://draw-request";
+const MIN_DRAW_SELECTION_WIDTH = 8;
+const MIN_DRAW_SELECTION_HEIGHT = 8;
 const appWindow = getCurrentWindow();
 
 const RESIZE_HANDLES: Array<{
@@ -26,15 +29,73 @@ const RESIZE_HANDLES: Array<{
   { direction: "SouthWest", className: "south-west", ariaLabel: "向左下调整" },
 ];
 
+type OcrRegionDrawRequest = {
+  viewportX: number;
+  viewportY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+};
+
+type DrawPoint = {
+  x: number;
+  y: number;
+};
+
+type DrawRect = DrawPoint & {
+  width: number;
+  height: number;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeDrawRect(start: DrawPoint, end: DrawPoint): DrawRect {
+  const left = Math.min(start.x, end.x);
+  const top = Math.min(start.y, end.y);
+  const right = Math.max(start.x, end.x);
+  const bottom = Math.max(start.y, end.y);
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
 export function OcrRegionWindow() {
   const [state, setState] = useState<OcrRegionState | null>(null);
+  const [drawRequest, setDrawRequest] = useState<OcrRegionDrawRequest | null>(null);
+  const [drawRect, setDrawRect] = useState<DrawRect | null>(null);
+
   const stateRef = useRef<OcrRegionState | null>(null);
+  const drawRequestRef = useRef<OcrRegionDrawRequest | null>(null);
+  const drawRequestFetchPendingRef = useRef(false);
   const geometryTimerRef = useRef<number | null>(null);
+  const drawOriginRef = useRef<DrawPoint | null>(null);
+  const drawPointerIdRef = useRef<number | null>(null);
+
+  const beginDrawingSession = useEffectEvent((payload: OcrRegionDrawRequest) => {
+    drawOriginRef.current = null;
+    drawPointerIdRef.current = null;
+    drawRequestRef.current = payload;
+    setDrawRect(null);
+    setDrawRequest(payload);
+  });
+
+  const resetDrawingSession = useEffectEvent(() => {
+    drawOriginRef.current = null;
+    drawPointerIdRef.current = null;
+    drawRequestRef.current = null;
+    setDrawRequest(null);
+    setDrawRect(null);
+  });
 
   const persistState = useEffectEvent(async () => {
     const currentState = stateRef.current;
 
-    if (!currentState) {
+    if (!currentState || drawRequestRef.current) {
       return;
     }
 
@@ -82,9 +143,75 @@ export function OcrRegionWindow() {
     }, 160);
   });
 
+  const ensureDrawingSession = useEffectEvent(async () => {
+    if (drawRequestRef.current || drawRequestFetchPendingRef.current) {
+      return;
+    }
+
+    drawRequestFetchPendingRef.current = true;
+
+    try {
+      const pendingDrawRequest = await invoke<OcrRegionDrawRequest | null>(
+        "load_ocr_region_draw_request",
+      );
+
+      if (pendingDrawRequest && !drawRequestRef.current) {
+        beginDrawingSession(pendingDrawRequest);
+      }
+    } catch (error) {
+      console.error("load ocr region draw request failed:", error);
+    } finally {
+      drawRequestFetchPendingRef.current = false;
+    }
+  });
+
+  const cancelDrawing = useEffectEvent(async () => {
+    try {
+      const restoredState = await invoke<OcrRegionState>("cancel_ocr_region_drawing");
+      stateRef.current = restoredState;
+      setState(restoredState);
+      resetDrawingSession();
+    } catch (error) {
+      console.error("cancel ocr region drawing failed:", error);
+    }
+  });
+
+  const finishDrawing = useEffectEvent(async (nextDrawRect: DrawRect) => {
+    const currentDrawRequest = drawRequestRef.current;
+
+    if (!currentDrawRequest) {
+      return;
+    }
+
+    try {
+      const currentState =
+        stateRef.current ?? (await invoke<OcrRegionState>("load_ocr_region_state"));
+      const savedState = await invoke<OcrRegionState>("apply_ocr_region_state", {
+        nextState: {
+          ...currentState,
+          visible: true,
+          x: currentDrawRequest.viewportX + nextDrawRect.x,
+          y: currentDrawRequest.viewportY + nextDrawRect.y,
+          width: nextDrawRect.width,
+          height: nextDrawRect.height,
+        },
+      });
+
+      stateRef.current = savedState;
+      setState(savedState);
+      resetDrawingSession();
+    } catch (error) {
+      console.error("finish ocr region drawing failed:", error);
+    }
+  });
+
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    drawRequestRef.current = drawRequest;
+  }, [drawRequest]);
 
   useEffect(() => {
     const cleanupScope = createAsyncCleanupScope();
@@ -102,6 +229,12 @@ export function OcrRegionWindow() {
       listen<OcrRegionState>(EVENT_OCR_REGION_STATE_CHANGED, ({ payload }) => {
         stateRef.current = payload;
         setState(payload);
+      }),
+    );
+
+    cleanupScope.register(
+      listen<OcrRegionDrawRequest>(EVENT_OCR_REGION_DRAW_REQUEST, ({ payload }) => {
+        beginDrawingSession(payload);
       }),
     );
 
@@ -126,6 +259,15 @@ export function OcrRegionWindow() {
     );
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (drawRequestRef.current) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          void cancelDrawing();
+        }
+
+        return;
+      }
+
       if (event.key === "Escape" || event.key === "Enter") {
         event.preventDefault();
         void invoke("hide_ocr_region");
@@ -133,6 +275,8 @@ export function OcrRegionWindow() {
     };
 
     window.addEventListener("keydown", handleKeyDown);
+
+    void ensureDrawingSession();
 
     return () => {
       if (geometryTimerRef.current) {
@@ -143,7 +287,15 @@ export function OcrRegionWindow() {
       window.removeEventListener("keydown", handleKeyDown);
       cleanupScope.dispose();
     };
-  }, [scheduleGeometrySync]);
+  }, [beginDrawingSession, cancelDrawing, ensureDrawingSession, scheduleGeometrySync]);
+
+  useEffect(() => {
+    if (!state || drawRequest) {
+      return;
+    }
+
+    void ensureDrawingSession();
+  }, [drawRequest, ensureDrawingSession, state]);
 
   async function handleRegionPointerDown(event: PointerEvent<HTMLElement>) {
     if (event.button !== 0) {
@@ -168,8 +320,129 @@ export function OcrRegionWindow() {
     await appWindow.startResizeDragging(direction);
   }
 
+  function getDrawPoint(event: PointerEvent<HTMLElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+
+    return {
+      x: clamp(event.clientX - bounds.left, 0, bounds.width),
+      y: clamp(event.clientY - bounds.top, 0, bounds.height),
+    };
+  }
+
+  function handleDrawingPointerDown(event: PointerEvent<HTMLElement>) {
+    if (!drawRequestRef.current) {
+      return;
+    }
+
+    if (event.button === 2) {
+      event.preventDefault();
+      void cancelDrawing();
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const nextOrigin = getDrawPoint(event);
+
+    drawOriginRef.current = nextOrigin;
+    drawPointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrawRect({
+      x: nextOrigin.x,
+      y: nextOrigin.y,
+      width: 0,
+      height: 0,
+    });
+  }
+
+  function handleDrawingPointerMove(event: PointerEvent<HTMLElement>) {
+    if (
+      !drawRequestRef.current ||
+      drawPointerIdRef.current !== event.pointerId ||
+      !drawOriginRef.current
+    ) {
+      return;
+    }
+
+    setDrawRect(normalizeDrawRect(drawOriginRef.current, getDrawPoint(event)));
+  }
+
+  function handleDrawingContextMenu(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+  }
+
+  function handleDrawingPointerUp(event: PointerEvent<HTMLElement>) {
+    if (
+      !drawRequestRef.current ||
+      drawPointerIdRef.current !== event.pointerId ||
+      !drawOriginRef.current
+    ) {
+      return;
+    }
+
+    const nextDrawRect = normalizeDrawRect(drawOriginRef.current, getDrawPoint(event));
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    drawOriginRef.current = null;
+    drawPointerIdRef.current = null;
+
+    if (
+      nextDrawRect.width < MIN_DRAW_SELECTION_WIDTH ||
+      nextDrawRect.height < MIN_DRAW_SELECTION_HEIGHT
+    ) {
+      setDrawRect(null);
+      return;
+    }
+
+    setDrawRect(nextDrawRect);
+    void finishDrawing(nextDrawRect);
+  }
+
+  function handleDrawingPointerCancel() {
+    drawOriginRef.current = null;
+    drawPointerIdRef.current = null;
+    setDrawRect(null);
+  }
+
+  const drawRectStyle = drawRect
+    ? ({
+        left: drawRect.x,
+        top: drawRect.y,
+        width: drawRect.width,
+        height: drawRect.height,
+      } as CSSProperties)
+    : undefined;
+  const drawSizeLabel = drawRect
+    ? `${Math.round(drawRect.width)} × ${Math.round(drawRect.height)}`
+    : "按住鼠标左键拖拽选择 OCR 区域，右键或 Esc 取消";
+
+  if (drawRequest) {
+    return (
+      <main className="region-shell" data-mode="drawing">
+        <section
+          className="drawing-surface"
+          onContextMenu={handleDrawingContextMenu}
+          onPointerDown={handleDrawingPointerDown}
+          onPointerMove={handleDrawingPointerMove}
+          onPointerUp={handleDrawingPointerUp}
+          onPointerCancel={handleDrawingPointerCancel}
+        >
+          <div className="drawing-hint">{drawSizeLabel}</div>
+          {drawRect ? <div className="drawing-box" style={drawRectStyle}></div> : null}
+        </section>
+      </main>
+    );
+  }
+
   return (
-    <main className="region-shell">
+    <main className="region-shell" data-mode="edit">
       <section
         id="region"
         className="region"

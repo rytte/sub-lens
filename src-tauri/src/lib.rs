@@ -44,6 +44,7 @@ use xcap::Monitor;
 const EVENT_STATE_CHANGED: &str = "overlay://state";
 const EVENT_PIXEL_FRAME: &str = "overlay://pixel-frame";
 const EVENT_OCR_REGION_STATE_CHANGED: &str = "ocr-region://state";
+const EVENT_OCR_REGION_DRAW_REQUEST: &str = "ocr-region://draw-request";
 const EVENT_OCR_RUNTIME_REQUEST: &str = "ocr-runtime://request";
 const EVENT_SUBTITLE_STATUS_CHANGED: &str = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED: &str = "subtitle://result";
@@ -249,6 +250,15 @@ struct OcrRegionStatePayload {
     height: f64,
     x: Option<f64>,
     y: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrRegionDrawRequestPayload {
+    viewport_x: f64,
+    viewport_y: f64,
+    viewport_width: f64,
+    viewport_height: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,6 +476,8 @@ impl Default for SubtitleStatusPayload {
 struct SharedState {
     overlay: OverlayStatePayload,
     ocr_region: OcrRegionStatePayload,
+    ocr_region_drawing: bool,
+    ocr_region_draw_request: Option<OcrRegionDrawRequestPayload>,
     subtitle_settings: SubtitleExplainSettingsPayload,
     subtitle_explain_window: SubtitleExplainWindowStatePayload,
     subtitle_status: SubtitleStatusPayload,
@@ -486,6 +498,8 @@ impl SharedState {
         Self {
             overlay,
             ocr_region,
+            ocr_region_drawing: false,
+            ocr_region_draw_request: None,
             subtitle_settings,
             subtitle_explain_window,
             subtitle_status: SubtitleStatusPayload::default(),
@@ -932,6 +946,39 @@ fn current_ocr_region_state(app: &AppHandle) -> Result<OcrRegionStatePayload, St
     Ok(shared.ocr_region.clone())
 }
 
+fn is_ocr_region_drawing(app: &AppHandle) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.ocr_region_drawing)
+}
+
+fn current_ocr_region_draw_request(
+    app: &AppHandle,
+) -> Result<Option<OcrRegionDrawRequestPayload>, String> {
+    let state = app.state::<AppState>();
+    let shared = state.0.lock().map_err(|err| err.to_string())?;
+    Ok(shared.ocr_region_draw_request.clone())
+}
+
+fn start_ocr_region_drawing_session(
+    app: &AppHandle,
+    draw_request: OcrRegionDrawRequestPayload,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    shared.ocr_region_drawing = true;
+    shared.ocr_region_draw_request = Some(draw_request);
+    Ok(())
+}
+
+fn finish_ocr_region_drawing_session(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut shared = state.0.lock().map_err(|err| err.to_string())?;
+    shared.ocr_region_drawing = false;
+    shared.ocr_region_draw_request = None;
+    Ok(())
+}
+
 fn current_subtitle_settings(app: &AppHandle) -> Result<SubtitleExplainSettingsPayload, String> {
     let state = app.state::<AppState>();
     let shared = state.0.lock().map_err(|err| err.to_string())?;
@@ -1132,6 +1179,30 @@ fn centered_horizontal_position(
         .unwrap_or_else(|| work_y + ((work_height - overlay.height) / 2.0));
 
     Ok(Some(LogicalPosition::new(centered_x, y)))
+}
+
+fn capture_target_monitor(
+    window: &tauri::WebviewWindow,
+) -> Result<(Monitor, f64, f64, f64, f64), String> {
+    let position = window.outer_position().map_err(|err| err.to_string())?;
+    let size = window.inner_size().map_err(|err| err.to_string())?;
+    let center_x = position.x + (size.width as i32 / 2);
+    let center_y = position.y + (size.height as i32 / 2);
+
+    let monitor = Monitor::from_point(center_x, center_y).map_err(|err| err.to_string())?;
+    let scale = f64::from(monitor.scale_factor().map_err(|err| err.to_string())?);
+    let viewport_x = f64::from(monitor.x().map_err(|err| err.to_string())?) / scale;
+    let viewport_y = f64::from(monitor.y().map_err(|err| err.to_string())?) / scale;
+    let viewport_width = f64::from(monitor.width().map_err(|err| err.to_string())?) / scale;
+    let viewport_height = f64::from(monitor.height().map_err(|err| err.to_string())?) / scale;
+
+    Ok((
+        monitor,
+        viewport_x,
+        viewport_y,
+        viewport_width,
+        viewport_height,
+    ))
 }
 
 fn effective_overlay_visibility(overlay: &OverlayStatePayload, ctrl_pressed: bool) -> bool {
@@ -1704,6 +1775,7 @@ fn set_color(app: &AppHandle, color: &str) -> Result<OverlayStatePayload, String
 }
 
 fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
+    finish_ocr_region_drawing_session(app)?;
     let main_window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
@@ -1735,6 +1807,13 @@ fn show_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, Stri
 }
 
 fn hide_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
+    if is_ocr_region_drawing(app)? {
+        finish_ocr_region_drawing_session(app)?;
+        let mut state = current_ocr_region_state(app)?;
+        state.visible = false;
+        return commit_ocr_region_state(app, state, true, true, false);
+    }
+
     let state = sync_ocr_region_state_from_window(app, Some(false))?;
     apply_ocr_region_window_state(app, &state)?;
     Ok(state)
@@ -1747,6 +1826,55 @@ fn toggle_ocr_region_editor(app: &AppHandle) -> Result<OcrRegionStatePayload, St
     } else {
         show_ocr_region_editor(app)
     }
+}
+
+fn start_ocr_region_drawing_inner(app: &AppHandle) -> Result<(), String> {
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "找不到遮挡窗口".to_string())?;
+    let _ = sync_ocr_region_state_from_window(app, None);
+    let (_, viewport_x, viewport_y, viewport_width, viewport_height) =
+        capture_target_monitor(&main_window)?;
+    let window = ensure_ocr_region_window(app)?;
+    if window.is_visible().map_err(|err| err.to_string())? {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+    let draw_request = OcrRegionDrawRequestPayload {
+        viewport_x,
+        viewport_y,
+        viewport_width,
+        viewport_height,
+    };
+    start_ocr_region_drawing_session(app, draw_request.clone())?;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|err| err.to_string())?;
+    window
+        .set_size(LogicalSize::new(viewport_width, viewport_height))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(LogicalPosition::new(viewport_x, viewport_y))
+        .map_err(|err| err.to_string())?;
+    window
+        .emit(EVENT_OCR_REGION_DRAW_REQUEST, draw_request)
+        .map_err(|err| err.to_string())?;
+    let _ = window.unminimize();
+    window.show().map_err(|err| err.to_string())?;
+    window.set_focus().map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+fn cancel_ocr_region_drawing_inner(app: &AppHandle) -> Result<OcrRegionStatePayload, String> {
+    let state = current_ocr_region_state(app)?;
+    finish_ocr_region_drawing_session(app)?;
+    apply_ocr_region_window_state(app, &state)?;
+    if state.visible {
+        if let Some(window) = app.get_webview_window(OCR_REGION_WINDOW_LABEL) {
+            let _ = window.set_focus();
+        }
+    }
+    Ok(state)
 }
 
 fn open_subtitle_explain_window(app: &AppHandle) -> Result<(), String> {
@@ -3015,8 +3143,25 @@ fn hide_ocr_region(app: AppHandle) -> Result<OcrRegionStatePayload, String> {
 }
 
 #[tauri::command]
+fn start_ocr_region_drawing(app: AppHandle) -> Result<(), String> {
+    start_ocr_region_drawing_inner(&app)
+}
+
+#[tauri::command]
+fn cancel_ocr_region_drawing(app: AppHandle) -> Result<OcrRegionStatePayload, String> {
+    cancel_ocr_region_drawing_inner(&app)
+}
+
+#[tauri::command]
 fn load_ocr_region_state(app: AppHandle) -> Result<OcrRegionStatePayload, String> {
     current_ocr_region_state(&app)
+}
+
+#[tauri::command]
+fn load_ocr_region_draw_request(
+    app: AppHandle,
+) -> Result<Option<OcrRegionDrawRequestPayload>, String> {
+    current_ocr_region_draw_request(&app)
 }
 
 #[tauri::command]
@@ -3024,6 +3169,7 @@ fn apply_ocr_region_state(
     app: AppHandle,
     next_state: OcrRegionStatePayload,
 ) -> Result<OcrRegionStatePayload, String> {
+    finish_ocr_region_drawing_session(&app)?;
     commit_ocr_region_state(&app, next_state, true, true, false)
 }
 
@@ -3032,6 +3178,10 @@ fn save_ocr_region_window_state_command(
     app: AppHandle,
     next_state: OcrRegionStatePayload,
 ) -> Result<OcrRegionStatePayload, String> {
+    if is_ocr_region_drawing(&app)? {
+        return current_ocr_region_state(&app);
+    }
+
     let mut state = current_ocr_region_state(&app)?;
     state.width = next_state.width;
     state.height = next_state.height;
@@ -3530,10 +3680,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_overlay_state,
             load_ocr_region_state,
+            load_ocr_region_draw_request,
             apply_ocr_region_state,
             save_ocr_region_window_state_command,
             show_ocr_region,
             hide_ocr_region,
+            start_ocr_region_drawing,
+            cancel_ocr_region_drawing,
             load_subtitle_explain_settings,
             save_subtitle_explain_window_state_command,
             load_subtitle_explain_mode,
