@@ -757,7 +757,7 @@ pub(super) fn run_static_screen_selection_analysis_blocking(
     selection: OcrSelectionPayload,
 ) -> Result<SubtitleAnalysisResultPayload, String> {
     let static_session = take_static_screen_selection_session(app)?
-        .ok_or_else(|| "当前没有待处理的静态划词会话。".to_string())?;
+        .ok_or_else(|| "当前没有待处理的截图翻译会话。".to_string())?;
     finish_ocr_region_drawing_session(app)?;
     super::app_window::restore_static_screen_selection_windows(app, &static_session)?;
 
@@ -769,7 +769,7 @@ pub(super) fn run_static_screen_selection_analysis_blocking(
                 app,
                 false,
                 "error",
-                "静态划词提交失败。",
+                "截图翻译提交失败。",
                 Some(message.clone()),
             );
             return Err(message);
@@ -778,7 +778,7 @@ pub(super) fn run_static_screen_selection_analysis_blocking(
     let settings = current_subtitle_settings(app)?;
 
     super::app_window::open_subtitle_explain_window(app)?;
-    set_subtitle_status(app, true, "capture", "正在识别划词区域文本...", None)?;
+    set_subtitle_status(app, true, "capture", "正在识别截图区域文本...", None)?;
 
     let image_path =
         match crop_static_selection_image(&static_session, &selection, settings.ocr_settings.engine)
@@ -807,23 +807,23 @@ pub(super) fn run_static_screen_selection_analysis_blocking(
                     app,
                     false,
                     "error",
-                    "识别划词区域失败。",
+                    "识别截图区域失败。",
                     Some(err.clone()),
                 );
                 return Err(err);
             }
         };
 
-    set_subtitle_status(app, true, "llm", "正在解析划词内容...", None)?;
+    set_subtitle_status(app, true, "llm", "正在解析截图内容...", None)?;
 
     match explain_subtitle_text(app, &settings, &source_text) {
         Ok(result) => {
             let result = set_subtitle_result(app, result)?;
-            set_subtitle_status(app, false, "done", "划词翻译完成。", None)?;
+            set_subtitle_status(app, false, "done", "截图翻译完成。", None)?;
             Ok(result)
         }
         Err(err) => {
-            let _ = set_subtitle_status(app, false, "error", "划词翻译失败。", Some(err.clone()));
+            let _ = set_subtitle_status(app, false, "error", "截图翻译失败。", Some(err.clone()));
             Err(err)
         }
     }

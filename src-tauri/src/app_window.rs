@@ -853,7 +853,7 @@ pub(super) fn open_more_settings_window(app: &AppHandle) -> Result<(), String> {
     )
     .title("更多设置")
     .inner_size(640.0, 760.0)
-    .min_inner_size(540.0, 680.0)
+    .min_inner_size(600.0, 680.0)
     .resizable(true)
     .always_on_top(true)
     .center()

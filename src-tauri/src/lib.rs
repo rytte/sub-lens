@@ -132,7 +132,7 @@ impl ConfiguredShortcutAction {
             Self::ToggleOverlayVisibility => "显示 / 隐藏遮挡条",
             Self::ToggleOverlayLock => "锁定 / 解锁遮挡条",
             Self::EditOcrRegion => "编辑 OCR 区域",
-            Self::StartStaticScreenSelection => "划词翻译",
+            Self::StartStaticScreenSelection => "截图翻译",
             Self::AnalyzeCurrentSubtitle => "解析当前字幕",
         }
     }

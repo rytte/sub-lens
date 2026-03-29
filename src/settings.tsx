@@ -160,13 +160,23 @@ const HOTKEY_FIELDS: Array<{
   },
   {
     key: "startStaticScreenSelection",
-    label: "划词翻译",
+    label: "截图翻译",
   },
   {
     key: "analyzeCurrentSubtitle",
     label: "解析当前字幕",
   },
 ];
+
+const SETTINGS_SECTIONS = [
+  { id: "ocr-engine", label: "OCR 引擎" },
+  { id: "tray-action", label: "托盘点击" },
+  { id: "shortcuts", label: "快捷键" },
+  { id: "provider", label: "字幕解释" },
+  { id: "realtime", label: "实时参数" },
+] as const;
+
+type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
 
 type InlineStatus = {
   message: string;
@@ -473,12 +483,8 @@ function trayClickActionHint(action: TrayClickAction) {
   );
 }
 
-function defaultModelHint(provider: SubtitleProvider) {
-  if (provider === "openAiResponses") {
-    return "";
-  }
-
-  return "可以手动填写模型，也可以从当前 Ollama 服务拉取已安装模型。";
+function defaultModelHint() {
+  return "";
 }
 
 function providerPlaceholders(provider: SubtitleProvider) {
@@ -560,6 +566,9 @@ function engineStatusLabel(item: OcrEngineAvailability) {
 
 export function SettingsWindow() {
   const [theme, setTheme] = useState<SettingsTheme>(loadSettingsTheme);
+  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(
+    SETTINGS_SECTIONS[0].id,
+  );
   const [form, setForm] = useState<SettingsFormState | null>(null);
   const [status, setStatus] = useState<InlineStatus>({
     message: "正在加载设置...",
@@ -594,7 +603,7 @@ export function SettingsWindow() {
     setForm(nextForm);
     setModelSuggestions([]);
     setModelHint({
-      message: defaultModelHint(settings.provider),
+      message: defaultModelHint(),
       tone: "idle",
     });
     setOcrHint({
@@ -669,6 +678,43 @@ export function SettingsWindow() {
       });
   }, []);
 
+  useEffect(() => {
+    const sections = SETTINGS_SECTIONS.map(({ id }) => document.getElementById(id)).filter(
+      (section): section is HTMLElement => section instanceof HTMLElement,
+    );
+
+    if (sections.length === 0) {
+      return;
+    }
+
+    const updateActiveSection = () => {
+      const offset = window.innerHeight * 0.24;
+      let nextActiveSectionId = sections[0].id as SettingsSectionId;
+
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= offset) {
+          nextActiveSectionId = section.id as SettingsSectionId;
+          continue;
+        }
+
+        break;
+      }
+
+      setActiveSectionId((currentSectionId) =>
+        currentSectionId === nextActiveSectionId ? currentSectionId : nextActiveSectionId,
+      );
+    };
+
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, []);
+
   async function dismissWindow() {
     try {
       if (loadedSettingsRef.current) {
@@ -715,7 +761,7 @@ export function SettingsWindow() {
       setForm(nextForm);
       setModelSuggestions([]);
       setModelHint({
-        message: defaultModelHint(savedSettings.provider),
+        message: defaultModelHint(),
         tone: "idle",
       });
       setStatus({
@@ -753,7 +799,7 @@ export function SettingsWindow() {
       setForm(nextForm);
       setModelSuggestions([]);
       setModelHint({
-        message: defaultModelHint(settings.provider),
+        message: defaultModelHint(),
         tone: "idle",
       });
       setStatus({
@@ -968,49 +1014,88 @@ export function SettingsWindow() {
     );
   }
 
+  function scrollToSection(sectionId: SettingsSectionId) {
+    const section = document.getElementById(sectionId);
+
+    if (!section) {
+      return;
+    }
+
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth";
+
+    setActiveSectionId(sectionId);
+    section.scrollIntoView({ behavior, block: "start" });
+  }
+
   return (
-    <main className="settings-shell">
-      <header className="hero-card">
-        <div>
-          <p className="eyebrow">字幕解析与 OCR</p>
-          <h1 className="hero-title">更多设置</h1>
-          <p className="hero-subtitle">
-            在这里统一管理 OCR 引擎、字幕解释 Provider 和实时识别参数。
-          </p>
-        </div>
-        <div className="hero-side">
-          <div className="theme-toggle" aria-label="主题">
-            <button
-              className="theme-toggle-button"
-              type="button"
-              data-active={theme === "dark" ? "true" : "false"}
-              aria-label="深色主题"
-              aria-pressed={theme === "dark"}
-              title="深色主题"
-              onClick={() => {
-                setTheme("dark");
-              }}
-            >
-              <ThemeMoonIcon />
-            </button>
-            <button
-              className="theme-toggle-button"
-              type="button"
-              data-active={theme === "light" ? "true" : "false"}
-              aria-label="浅色主题"
-              aria-pressed={theme === "light"}
-              title="浅色主题"
-              onClick={() => {
-                setTheme("light");
-              }}
-            >
-              <ThemeSunIcon />
-            </button>
+    <div className="settings-layout">
+      <aside className="settings-nav" aria-label="更多设置导航">
+        <div className="settings-nav-card">
+          <p className="settings-nav-eyebrow">快速跳转</p>
+          <div className="settings-nav-list">
+            {SETTINGS_SECTIONS.map((section, index) => (
+              <button
+                key={section.id}
+                className="settings-nav-button"
+                type="button"
+                data-active={activeSectionId === section.id ? "true" : "false"}
+                aria-current={activeSectionId === section.id ? "location" : undefined}
+                onClick={() => {
+                  scrollToSection(section.id);
+                }}
+              >
+                <span className="settings-nav-index">{String(index + 1).padStart(2, "0")}</span>
+                <span className="settings-nav-label">{section.label}</span>
+              </button>
+            ))}
           </div>
         </div>
-      </header>
+      </aside>
 
-      <section className="settings-card section-grid two-columns">
+      <main className="settings-shell">
+        <header className="hero-card">
+          <div>
+            <p className="eyebrow">字幕解析与 OCR</p>
+            <h1 className="hero-title">更多设置</h1>
+            <p className="hero-subtitle">
+              在这里统一管理 OCR 引擎、字幕解释 Provider 和实时识别参数。
+            </p>
+          </div>
+          <div className="hero-side">
+            <div className="theme-toggle" aria-label="主题">
+              <button
+                className="theme-toggle-button"
+                type="button"
+                data-active={theme === "dark" ? "true" : "false"}
+                aria-label="深色主题"
+                aria-pressed={theme === "dark"}
+                title="深色主题"
+                onClick={() => {
+                  setTheme("dark");
+                }}
+              >
+                <ThemeMoonIcon />
+              </button>
+              <button
+                className="theme-toggle-button"
+                type="button"
+                data-active={theme === "light" ? "true" : "false"}
+                aria-label="浅色主题"
+                aria-pressed={theme === "light"}
+                title="浅色主题"
+                onClick={() => {
+                  setTheme("light");
+                }}
+              >
+                <ThemeSunIcon />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <section id="ocr-engine" className="settings-card settings-section section-grid two-columns">
         <div className="section-head full-span">
           <div>
             <h2>OCR 引擎</h2>
@@ -1135,9 +1220,9 @@ export function SettingsWindow() {
         <p className="inline-hint full-span">
           {form ? defaultOcrHint(form.ocrEngine) : ""}
         </p>
-      </section>
+        </section>
 
-      <section className="settings-card section-grid">
+        <section id="tray-action" className="settings-card settings-section section-grid">
         <div className="section-head">
           <div>
             <h2>托盘点击</h2>
@@ -1171,9 +1256,9 @@ export function SettingsWindow() {
             {trayClickActionHint(form?.trayClickAction ?? "overlay")}
           </span>
         </label>
-      </section>
+        </section>
 
-      <section className="settings-card section-grid">
+        <section id="shortcuts" className="settings-card settings-section section-grid">
         <div className="section-head full-span">
           <div>
             <h2>快捷键</h2>
@@ -1202,9 +1287,9 @@ export function SettingsWindow() {
             ) : null}
           </label>
         ))}
-      </section>
+        </section>
 
-      <section className="settings-card section-grid">
+        <section id="provider" className="settings-card settings-section section-grid">
         <div className="section-head section-head-provider">
           <div>
             <h2>字幕解释 Provider</h2>
@@ -1228,7 +1313,7 @@ export function SettingsWindow() {
               );
               setModelSuggestions([]);
               setModelHint({
-                message: defaultModelHint(nextProvider),
+                message: defaultModelHint(),
                 tone: "idle",
               });
             }}
@@ -1365,9 +1450,12 @@ export function SettingsWindow() {
             {modelHint.message}
           </span>
         </label>
-      </section>
+        </section>
 
-      <section className="settings-card section-grid two-columns">
+        <section
+          id="realtime"
+          className="settings-card settings-section section-grid two-columns"
+        >
         <div className="section-head section-head-realtime full-span">
           <div>
             <h2>实时参数</h2>
@@ -1441,44 +1529,45 @@ export function SettingsWindow() {
             }}
           />
         </label>
-      </section>
+        </section>
 
-      <footer className="footer-bar">
-        <div className="status-text" data-tone={status.tone}>
-          {status.message}
-        </div>
-        <div className="action-row">
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => {
-              void resetSettings();
-            }}
-          >
-            恢复默认
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => {
-              void dismissWindow();
-            }}
-          >
-            关闭
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={isSaving}
-            onClick={() => {
-              void saveSettings();
-            }}
-          >
-            保存
-          </button>
-        </div>
-      </footer>
-    </main>
+        <footer className="footer-bar">
+          <div className="status-text" data-tone={status.tone}>
+            {status.message}
+          </div>
+          <div className="action-row">
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => {
+                void resetSettings();
+              }}
+            >
+              恢复默认
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => {
+                void dismissWindow();
+              }}
+            >
+              关闭
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={isSaving}
+              onClick={() => {
+                void saveSettings();
+              }}
+            >
+              保存
+            </button>
+          </div>
+        </footer>
+      </main>
+    </div>
   );
 }
 

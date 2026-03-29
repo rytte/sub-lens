@@ -453,7 +453,7 @@ export function OcrRegionWindow() {
     : undefined;
   const drawIdleLabel =
     drawRequest?.mode === "analyzeStatic"
-      ? "按住鼠标左键拖拽划词翻译，松开后直接识别解析，右键或 Esc 取消"
+      ? "按住鼠标左键拖拽框选截图区域，松开后直接识别解析，右键或 Esc 取消"
       : "按住鼠标左键拖拽选择 OCR 区域，右键或 Esc 取消";
   const drawSizeLabel = drawRect
     ? `${Math.round(drawRect.width)} × ${Math.round(drawRect.height)}`

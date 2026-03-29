@@ -735,6 +735,24 @@ export function SubtitleExplainWindow() {
     }
   }
 
+  async function toggleOcrRegionEditor() {
+    const editing = Boolean(ocrRegionState?.visible);
+
+    try {
+      const nextOcrRegionState = await invoke<OcrRegionState>(
+        editing ? "hide_ocr_region" : "show_ocr_region",
+      );
+      setOcrRegionState(nextOcrRegionState);
+    } catch (error) {
+      setSubtitleStatus({
+        analyzing: false,
+        stage: "error",
+        message: editing ? "完成 OCR 编辑失败。" : "进入 OCR 编辑失败。",
+        error: String(error),
+      });
+    }
+  }
+
   async function startStaticScreenSelection() {
     try {
       await invoke("start_static_screen_selection");
@@ -742,7 +760,7 @@ export function SubtitleExplainWindow() {
       setSubtitleStatus({
         analyzing: false,
         stage: "error",
-        message: "进入划词翻译失败。",
+        message: "进入截图翻译失败。",
         error: String(error),
       });
     }
@@ -931,7 +949,7 @@ export function SubtitleExplainWindow() {
               void startStaticScreenSelection();
             }}
           >
-            划词翻译
+            截图翻译
           </button>
           <button
             id="drawOcrButton"
@@ -948,7 +966,7 @@ export function SubtitleExplainWindow() {
             className="action-button"
             type="button"
             onClick={() => {
-              void invoke("show_ocr_region");
+              void toggleOcrRegionEditor();
             }}
           >
             编辑 OCR 区域

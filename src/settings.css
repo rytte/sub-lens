@@ -107,15 +107,25 @@ button {
   border: 0;
 }
 
-.settings-shell {
-  width: min(100%, 920px);
+.settings-layout {
+  width: min(100%, 1180px);
   margin: 0 auto;
   padding: 24px;
+  display: grid;
+  grid-template-columns: clamp(104px, 18vw, 188px) minmax(0, 1fr);
+  gap: clamp(12px, 2.2vw, 24px);
+  align-items: start;
+}
+
+.settings-shell {
+  width: min(100%, 920px);
+  min-width: 0;
 }
 
 .hero-card,
 .settings-card,
-.footer-bar {
+.footer-bar,
+.settings-nav-card {
   border: 1px solid var(--panel-border);
   border-radius: 20px;
   background: var(--panel-bg);
@@ -123,6 +133,79 @@ button {
     0 18px 48px var(--panel-shadow-ambient),
     inset 0 1px 0 var(--panel-shadow-highlight);
   backdrop-filter: blur(22px);
+}
+
+.settings-nav {
+  position: sticky;
+  top: clamp(16px, 2.4vw, 24px);
+  align-self: start;
+  z-index: 2;
+}
+
+.settings-nav-card {
+  padding: clamp(10px, 1.4vw, 14px);
+}
+
+.settings-nav-eyebrow {
+  margin: 0 0 10px;
+  color: var(--hero-eyebrow);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.settings-nav-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-nav-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  color: var(--page-subtle-text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform 120ms ease,
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.settings-nav-button:hover {
+  transform: translateX(2px);
+  color: var(--page-text);
+  background: var(--surface-muted);
+}
+
+.settings-nav-button[data-active="true"] {
+  color: var(--page-text);
+  border-color: var(--input-focus-border);
+  background: rgb(157 196 255 / 0.1);
+  box-shadow: 0 10px 24px -18px var(--input-focus-border);
+}
+
+.settings-nav-index {
+  color: var(--page-muted-text);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.settings-nav-label {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .hero-card {
@@ -207,6 +290,10 @@ button {
 .settings-card {
   margin-top: 18px;
   padding: 22px;
+}
+
+.settings-section {
+  scroll-margin-top: 24px;
 }
 
 .section-grid {
@@ -513,18 +600,29 @@ button {
 }
 
 @media (max-width: 720px) {
-  .settings-shell {
+  .settings-layout {
     padding: 16px;
   }
 
-  .hero-card,
   .footer-bar {
     flex-direction: column;
     align-items: stretch;
   }
 
+  .hero-card {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  .hero-card > :first-child {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+
   .hero-side {
-    align-items: stretch;
+    margin-left: auto;
+    align-items: flex-end;
+    flex: 0 0 auto;
   }
 
   .action-row {
