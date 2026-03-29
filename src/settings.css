@@ -289,6 +289,28 @@ button {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+.hotkey-field,
+.compact-field {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  column-gap: 16px;
+  row-gap: 8px;
+  align-items: center;
+}
+
+.hotkey-field-label,
+.compact-field-label {
+  margin: 0;
+}
+
+.hotkey-field .hotkey-input,
+.hotkey-field .field-help,
+.compact-field .text-input,
+.compact-field .select-input,
+.compact-field .field-help {
+  grid-column: 2;
+}
+
 .hotkey-input[data-conflict="true"] {
   border-color: rgba(255, 180, 180, 0.48);
   background: rgba(255, 120, 120, 0.08);
@@ -394,5 +416,21 @@ button {
 
   .two-columns {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .hotkey-field,
+  .compact-field {
+    grid-template-columns: 1fr;
+    column-gap: 0;
+  }
+
+  .hotkey-field .hotkey-input,
+  .hotkey-field .field-help,
+  .compact-field .text-input,
+  .compact-field .select-input,
+  .compact-field .field-help {
+    grid-column: auto;
   }
 }

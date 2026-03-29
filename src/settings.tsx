@@ -420,7 +420,7 @@ function trayClickActionHint(action: TrayClickAction) {
 
 function defaultModelHint(provider: SubtitleProvider) {
   if (provider === "openAiResponses") {
-    return "可以手动填写模型，也可以根据当前 Base URL 和 API Key 拉取模型列表。";
+    return "";
   }
 
   return "可以手动填写模型，也可以从当前 Ollama 服务拉取已安装模型。";
@@ -1086,15 +1086,15 @@ export function SettingsWindow() {
         </label>
       </section>
 
-      <section className="settings-card section-grid two-columns">
+      <section className="settings-card section-grid">
         <div className="section-head full-span">
           <div>
             <h2>快捷键</h2>
           </div>
         </div>
         {HOTKEY_FIELDS.map((field) => (
-          <label key={field.key} className="field">
-            <span className="field-label">{field.label}</span>
+          <label key={field.key} className="field hotkey-field">
+            <span className="field-label hotkey-field-label">{field.label}</span>
             <input
               className="text-input hotkey-input"
               type="text"
@@ -1286,8 +1286,8 @@ export function SettingsWindow() {
             <h2>实时参数</h2>
           </div>
         </div>
-        <label className="field">
-          <span className="field-label">OCR 间隔 (ms)</span>
+        <label className="field compact-field">
+          <span className="field-label compact-field-label">OCR 间隔 (ms)</span>
           <input
             className="text-input"
             type="number"
@@ -1303,8 +1303,8 @@ export function SettingsWindow() {
             }}
           />
         </label>
-        <label className="field">
-          <span className="field-label">稳定帧数</span>
+        <label className="field compact-field">
+          <span className="field-label compact-field-label">稳定帧数</span>
           <input
             className="text-input"
             type="number"
@@ -1320,8 +1320,8 @@ export function SettingsWindow() {
             }}
           />
         </label>
-        <label className="field">
-          <span className="field-label">相似度阈值</span>
+        <label className="field compact-field">
+          <span className="field-label compact-field-label">相似度阈值</span>
           <input
             className="text-input"
             type="number"
@@ -1337,8 +1337,8 @@ export function SettingsWindow() {
             }}
           />
         </label>
-        <label className="field">
-          <span className="field-label">空白清空阈值 (ms)</span>
+        <label className="field compact-field">
+          <span className="field-label compact-field-label">空白清空阈值 (ms)</span>
           <input
             className="text-input"
             type="number"
