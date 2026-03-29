@@ -500,7 +500,7 @@ export function OcrRegionWindow() {
         <header className="region-toolbar">
           <div>
             <p className="eyebrow">OCR 区域</p>
-            <p className="hint">拖动移动，边缘缩放，Enter / Esc 完成，Ctrl+Alt+J 解析当前字幕。</p>
+            <p className="hint">拖动移动，边缘缩放，Enter / Esc 完成；相关快捷键可在更多设置中修改。</p>
           </div>
           <button
             id="doneButton"

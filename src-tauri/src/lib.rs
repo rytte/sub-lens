@@ -28,9 +28,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_global_shortcut::{
-    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
-};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 use tauri_plugin_store::StoreExt;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
@@ -78,8 +76,11 @@ const OCR_RUNTIME_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const PYTHON_SIDECAR_SCRIPT: &str = "sidecars/subtitle_sidecar.py";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const SUBTITLE_SHORTCUT_ANALYZE: &str = "Ctrl+Shift+J";
-const SUBTITLE_SHORTCUT_EDIT_REGION: &str = "Ctrl+Shift+E";
+const DEFAULT_SHORTCUT_TOGGLE_OVERLAY_VISIBILITY: &str = "Ctrl+Alt+H";
+const DEFAULT_SHORTCUT_TOGGLE_OVERLAY_LOCK: &str = "Ctrl+Alt+Space";
+const DEFAULT_SHORTCUT_EDIT_OCR_REGION: &str = "Ctrl+Shift+E";
+const DEFAULT_SHORTCUT_START_STATIC_SCREEN_SELECTION: &str = "Ctrl+Alt+J";
+const DEFAULT_SHORTCUT_ANALYZE_CURRENT_SUBTITLE: &str = "Ctrl+Shift+J";
 
 const MENU_TOGGLE_VISIBLE: &str = "toggle_visible";
 const MENU_TOGGLE_LOCK: &str = "toggle_lock";
@@ -111,6 +112,27 @@ const MENU_ANALYZE_CURRENT_SUBTITLE: &str = "analyze_current_subtitle";
 const MENU_SHOW_SUBTITLE_EXPLAIN: &str = "show_subtitle_explain";
 const MENU_OPEN_MORE_SETTINGS: &str = "open_more_settings";
 const MENU_QUIT: &str = "quit";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ConfiguredShortcutAction {
+    ToggleOverlayVisibility,
+    ToggleOverlayLock,
+    EditOcrRegion,
+    StartStaticScreenSelection,
+    AnalyzeCurrentSubtitle,
+}
+
+impl ConfiguredShortcutAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ToggleOverlayVisibility => "显示 / 隐藏遮挡条",
+            Self::ToggleOverlayLock => "锁定 / 解锁遮挡条",
+            Self::EditOcrRegion => "编辑 OCR 区域",
+            Self::StartStaticScreenSelection => "划词翻译",
+            Self::AnalyzeCurrentSubtitle => "解析当前字幕",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +244,17 @@ struct SubtitleProviderProfilesPayload {
     ollama: ProviderConnectionSettingsPayload,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutSettingsPayload {
+    toggle_overlay_visibility: String,
+    toggle_overlay_lock: String,
+    edit_ocr_region: String,
+    start_static_screen_selection: String,
+    analyze_current_subtitle: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
@@ -239,6 +272,7 @@ struct SubtitleExplainSettingsPayload {
     stable_frames: u32,
     similarity_threshold: f64,
     blank_clear_ms: u32,
+    shortcut_settings: ShortcutSettingsPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,6 +464,7 @@ impl Default for SubtitleExplainSettingsPayload {
             stable_frames: 2,
             similarity_threshold: 0.88,
             blank_clear_ms: 600,
+            shortcut_settings: ShortcutSettingsPayload::default(),
         }
     }
 }
@@ -451,6 +486,18 @@ impl Default for SubtitleProviderProfilesPayload {
                 &SubtitleProvider::OpenAiResponses,
             ),
             ollama: default_provider_connection_settings(&SubtitleProvider::Ollama),
+        }
+    }
+}
+
+impl Default for ShortcutSettingsPayload {
+    fn default() -> Self {
+        Self {
+            toggle_overlay_visibility: DEFAULT_SHORTCUT_TOGGLE_OVERLAY_VISIBILITY.into(),
+            toggle_overlay_lock: DEFAULT_SHORTCUT_TOGGLE_OVERLAY_LOCK.into(),
+            edit_ocr_region: DEFAULT_SHORTCUT_EDIT_OCR_REGION.into(),
+            start_static_screen_selection: DEFAULT_SHORTCUT_START_STATIC_SCREEN_SELECTION.into(),
+            analyze_current_subtitle: DEFAULT_SHORTCUT_ANALYZE_CURRENT_SUBTITLE.into(),
         }
     }
 }
@@ -572,6 +619,13 @@ struct OcrRuntimeShared {
 
 struct OcrRuntimeState(Mutex<OcrRuntimeShared>);
 
+#[derive(Debug, Clone)]
+struct ParsedShortcutBinding {
+    action: ConfiguredShortcutAction,
+    shortcut: Shortcut,
+    accelerator: String,
+}
+
 fn current_timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -647,6 +701,16 @@ fn sanitize_provider_profiles(
     profiles.ollama =
         sanitize_provider_connection_settings(profiles.ollama, &SubtitleProvider::Ollama);
     profiles
+}
+
+fn sanitize_shortcut_settings(mut settings: ShortcutSettingsPayload) -> ShortcutSettingsPayload {
+    settings.toggle_overlay_visibility = settings.toggle_overlay_visibility.trim().to_string();
+    settings.toggle_overlay_lock = settings.toggle_overlay_lock.trim().to_string();
+    settings.edit_ocr_region = settings.edit_ocr_region.trim().to_string();
+    settings.start_static_screen_selection =
+        settings.start_static_screen_selection.trim().to_string();
+    settings.analyze_current_subtitle = settings.analyze_current_subtitle.trim().to_string();
+    settings
 }
 
 fn normalize_base_url(base_url: &str, provider: &SubtitleProvider) -> String {
@@ -788,6 +852,7 @@ fn sanitize_subtitle_settings(
 ) -> SubtitleExplainSettingsPayload {
     settings.provider_profiles = sanitize_provider_profiles(settings.provider_profiles);
     settings.ocr_settings = sanitize_ocr_settings(settings.ocr_settings);
+    settings.shortcut_settings = sanitize_shortcut_settings(settings.shortcut_settings);
     let active_profile = sanitize_provider_connection_settings(
         ProviderConnectionSettingsPayload {
             base_url: settings.base_url,
@@ -952,6 +1017,146 @@ fn save_ocr_region(app: &AppHandle, region: &OcrRegionStatePayload) -> Result<()
     store.set(STORE_KEY_OCR_REGION, json!(persisted));
     store.save().map_err(|err| err.to_string())?;
     store.close_resource();
+    Ok(())
+}
+
+fn configured_shortcut_entries(
+    shortcuts: &ShortcutSettingsPayload,
+) -> [(ConfiguredShortcutAction, &str); 5] {
+    [
+        (
+            ConfiguredShortcutAction::ToggleOverlayVisibility,
+            shortcuts.toggle_overlay_visibility.as_str(),
+        ),
+        (
+            ConfiguredShortcutAction::ToggleOverlayLock,
+            shortcuts.toggle_overlay_lock.as_str(),
+        ),
+        (
+            ConfiguredShortcutAction::EditOcrRegion,
+            shortcuts.edit_ocr_region.as_str(),
+        ),
+        (
+            ConfiguredShortcutAction::StartStaticScreenSelection,
+            shortcuts.start_static_screen_selection.as_str(),
+        ),
+        (
+            ConfiguredShortcutAction::AnalyzeCurrentSubtitle,
+            shortcuts.analyze_current_subtitle.as_str(),
+        ),
+    ]
+}
+
+fn shortcut_accelerator(shortcut: &str) -> Option<&str> {
+    let trimmed = shortcut.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn collect_shortcut_bindings(
+    shortcuts: &ShortcutSettingsPayload,
+) -> Result<Vec<ParsedShortcutBinding>, String> {
+    let mut seen: HashMap<u32, &'static str> = HashMap::new();
+    let mut bindings = Vec::new();
+
+    for (action, accelerator) in configured_shortcut_entries(shortcuts) {
+        let Some(accelerator) = shortcut_accelerator(accelerator) else {
+            continue;
+        };
+        let shortcut = Shortcut::try_from(accelerator)
+            .map_err(|err| format!("{} 快捷键无效：{err}", action.label()))?;
+        if let Some(previous_action) = seen.insert(shortcut.id(), action.label()) {
+            return Err(format!(
+                "快捷键重复：{} 与 {} 不能使用同一组合。",
+                previous_action,
+                action.label()
+            ));
+        }
+        bindings.push(ParsedShortcutBinding {
+            action,
+            shortcut,
+            accelerator: accelerator.to_string(),
+        });
+    }
+
+    Ok(bindings)
+}
+
+fn run_configured_shortcut_action(
+    app: &AppHandle,
+    action: ConfiguredShortcutAction,
+    event: ShortcutEvent,
+) {
+    if event.state() != ShortcutState::Pressed {
+        return;
+    }
+
+    let result = match action {
+        ConfiguredShortcutAction::ToggleOverlayVisibility => toggle_visibility(app),
+        ConfiguredShortcutAction::ToggleOverlayLock => toggle_lock(app),
+        ConfiguredShortcutAction::EditOcrRegion => {
+            toggle_ocr_region_editor(app).map(|_| current_overlay_state(app).unwrap_or_default())
+        }
+        ConfiguredShortcutAction::StartStaticScreenSelection => start_static_screen_selection_inner(app)
+            .map(|_| current_overlay_state(app).unwrap_or_default()),
+        ConfiguredShortcutAction::AnalyzeCurrentSubtitle => {
+            start_manual_subtitle_analysis(app.clone());
+            return;
+        }
+    };
+
+    if let Err(err) = result {
+        eprintln!("shortcut handler failed ({}): {err}", action.label());
+    }
+}
+
+fn register_shortcut_binding(app: &AppHandle, binding: &ParsedShortcutBinding) -> Result<(), String> {
+    let action = binding.action;
+    app.global_shortcut()
+        .on_shortcut(binding.shortcut, move |app, _shortcut, event| {
+            run_configured_shortcut_action(app, action, event);
+        })
+        .map_err(|err| {
+            format!(
+                "注册 {} 快捷键 {} 失败：{}",
+                binding.action.label(),
+                binding.accelerator,
+                err
+            )
+        })
+}
+
+fn register_shortcut_bindings(
+    app: &AppHandle,
+    bindings: &[ParsedShortcutBinding],
+) -> Result<(), String> {
+    for binding in bindings {
+        register_shortcut_binding(app, binding)?;
+    }
+
+    Ok(())
+}
+
+fn replace_configured_shortcuts(
+    app: &AppHandle,
+    previous_shortcuts: &ShortcutSettingsPayload,
+    next_shortcuts: &ShortcutSettingsPayload,
+) -> Result<(), String> {
+    let next_bindings = collect_shortcut_bindings(next_shortcuts)?;
+    let previous_bindings = collect_shortcut_bindings(previous_shortcuts).unwrap_or_default();
+    let shortcut_manager = app.global_shortcut();
+
+    shortcut_manager
+        .unregister_all()
+        .map_err(|err| format!("清空旧快捷键失败：{err}"))?;
+
+    if let Err(err) = register_shortcut_bindings(app, &next_bindings) {
+        let _ = shortcut_manager.unregister_all();
+        if let Err(restore_err) = register_shortcut_bindings(app, &previous_bindings) {
+            return Err(format!("{err}；回滚旧快捷键失败：{restore_err}"));
+        }
+        return Err(err);
+    }
+
     Ok(())
 }
 
@@ -1183,7 +1388,8 @@ fn refresh_tray_menu(app: &AppHandle, overlay: &OverlayStatePayload) -> Result<(
         return Ok(());
     };
 
-    let menu = build_tray_menu(app, overlay).map_err(|err| err.to_string())?;
+    let settings = current_subtitle_settings(app)?;
+    let menu = build_tray_menu(app, overlay, &settings).map_err(|err| err.to_string())?;
     tray.set_menu(Some(menu)).map_err(|err| err.to_string())
 }
 
@@ -1739,6 +1945,20 @@ fn save_runtime_subtitle_settings(
     settings: SubtitleExplainSettingsPayload,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
     let settings = sanitize_subtitle_settings(settings);
+    let previous_settings = {
+        let state = app.state::<AppState>();
+        let shared = state.0.lock().map_err(|err| err.to_string())?;
+        shared.subtitle_settings.clone()
+    };
+
+    if previous_settings.shortcut_settings != settings.shortcut_settings {
+        replace_configured_shortcuts(
+            app,
+            &previous_settings.shortcut_settings,
+            &settings.shortcut_settings,
+        )?;
+    }
+
     {
         let state = app.state::<AppState>();
         let mut shared = state.0.lock().map_err(|err| err.to_string())?;
@@ -3097,13 +3317,14 @@ fn start_realtime_subtitle_loop(app: AppHandle) {
 fn build_overlay_menu(
     app: &AppHandle,
     overlay: &OverlayStatePayload,
+    settings: &SubtitleExplainSettingsPayload,
 ) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let visibility = MenuItem::with_id(
         app,
         MENU_TOGGLE_VISIBLE,
         if overlay.visible { "隐藏" } else { "显示" },
         true,
-        Some("Ctrl+Alt+H"),
+        shortcut_accelerator(&settings.shortcut_settings.toggle_overlay_visibility),
     )?;
     let _lock_legacy = MenuItem::with_id(
         app,
@@ -3118,7 +3339,7 @@ fn build_overlay_menu(
         "锁定",
         true,
         overlay.locked,
-        Some("Ctrl+Alt+Space"),
+        shortcut_accelerator(&settings.shortcut_settings.toggle_overlay_lock),
     )?;
     let click_through = CheckMenuItem::with_id(
         app,
@@ -3373,6 +3594,7 @@ fn build_overlay_menu(
 fn build_tray_menu(
     app: &AppHandle,
     overlay: &OverlayStatePayload,
+    settings: &SubtitleExplainSettingsPayload,
 ) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let visibility = MenuItem::with_id(
         app,
@@ -3383,7 +3605,7 @@ fn build_tray_menu(
             "显示遮挡条"
         },
         true,
-        Some("Ctrl+Alt+H"),
+        shortcut_accelerator(&settings.shortcut_settings.toggle_overlay_visibility),
     )?;
     let lock = MenuItem::with_id(
         app,
@@ -3394,7 +3616,7 @@ fn build_tray_menu(
             "锁定遮挡条"
         },
         true,
-        Some("Ctrl+Alt+Space"),
+        shortcut_accelerator(&settings.shortcut_settings.toggle_overlay_lock),
     )?;
     let reset_position = MenuItem::with_id(
         app,
@@ -3491,7 +3713,8 @@ fn show_overlay_menu(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "找不到遮挡窗口".to_string())?;
     let overlay = current_overlay_state(&app)?;
-    let menu = build_overlay_menu(&app, &overlay).map_err(|err| err.to_string())?;
+    let settings = current_subtitle_settings(&app)?;
+    let menu = build_overlay_menu(&app, &overlay, &settings).map_err(|err| err.to_string())?;
 
     window
         .popup_menu_at(&menu, LogicalPosition::new(x, y))
@@ -3936,7 +4159,8 @@ fn start_ctrl_hold_loop(_app: AppHandle) {}
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let overlay = current_overlay_state(app).map_err(|err| err.to_string())?;
-    let menu = build_tray_menu(app, &overlay)?;
+    let settings = current_subtitle_settings(app).map_err(|err| err.to_string())?;
+    let menu = build_tray_menu(app, &overlay, &settings)?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(
@@ -3973,60 +4197,21 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn handle_registered_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
-    if event.state() != ShortcutState::Pressed {
-        return;
-    }
-
-    let result = if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::KeyH) {
-        toggle_visibility(app)
-    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Space) {
-        toggle_lock(app)
-    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyJ) {
-        start_manual_subtitle_analysis(app.clone());
-        return;
-    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyE) {
-        toggle_ocr_region_editor(app).map(|_| current_overlay_state(app).unwrap_or_default())
-    } else {
-        return;
-    };
-
-    if let Err(err) = result {
-        eprintln!("shortcut handler failed: {err}");
-    }
-}
-
 fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let toggle_visibility_shortcut = Shortcut::try_from("ctrl+alt+h")?;
-    let toggle_lock_shortcut = Shortcut::try_from("ctrl+alt+space")?;
-    let analyze_subtitle_shortcut = Shortcut::try_from(SUBTITLE_SHORTCUT_ANALYZE)?;
-    let edit_ocr_region_shortcut = Shortcut::try_from(SUBTITLE_SHORTCUT_EDIT_REGION)?;
-
     app.plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+    let settings = current_subtitle_settings(app).map_err(|err| err.to_string())?;
 
-    let shortcut_manager = app.global_shortcut();
-
-    if let Err(err) =
-        shortcut_manager.on_shortcut(toggle_visibility_shortcut, handle_registered_shortcut)
-    {
-        eprintln!("register shortcut Ctrl+Alt+H failed: {err}");
-    }
-
-    if let Err(err) = shortcut_manager.on_shortcut(toggle_lock_shortcut, handle_registered_shortcut)
-    {
-        eprintln!("register shortcut Ctrl+Alt+Space failed: {err}");
-    }
-
-    if let Err(err) =
-        shortcut_manager.on_shortcut(analyze_subtitle_shortcut, handle_registered_shortcut)
-    {
-        eprintln!("register shortcut {SUBTITLE_SHORTCUT_ANALYZE} failed: {err}");
-    }
-
-    if let Err(err) =
-        shortcut_manager.on_shortcut(edit_ocr_region_shortcut, handle_registered_shortcut)
-    {
-        eprintln!("register shortcut {SUBTITLE_SHORTCUT_EDIT_REGION} failed: {err}");
+    match collect_shortcut_bindings(&settings.shortcut_settings) {
+        Ok(bindings) => {
+            for binding in &bindings {
+                if let Err(err) = register_shortcut_binding(app, binding) {
+                    eprintln!("{err}");
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("load configured shortcuts failed: {err}");
+        }
     }
 
     Ok(())

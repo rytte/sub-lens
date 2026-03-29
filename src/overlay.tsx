@@ -58,7 +58,7 @@ function overlayHintText(state: OverlayState) {
   }
 
   if (state.autoCenter) {
-    return "自动水平居中已开启，可上下拖动，Ctrl+Shift+E 编辑 OCR 区域。";
+    return "自动水平居中已开启，可上下拖动；OCR 相关快捷键可在更多设置中修改。";
   }
 
   return "右键打开菜单。";

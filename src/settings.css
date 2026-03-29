@@ -285,6 +285,20 @@ button {
   background: #f3f7ff;
 }
 
+.hotkey-input {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+.hotkey-input[data-conflict="true"] {
+  border-color: rgba(255, 180, 180, 0.48);
+  background: rgba(255, 120, 120, 0.08);
+}
+
+.hotkey-input[data-conflict="true"]:focus {
+  border-color: rgba(255, 180, 180, 0.72);
+  box-shadow: 0 0 0 4px rgba(255, 120, 120, 0.14);
+}
+
 .footer-bar {
   position: sticky;
   bottom: 20px;

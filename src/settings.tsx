@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { mountWindowApp } from "./main";
 import type {
@@ -9,6 +10,7 @@ import type {
   OcrLanguage,
   OcrSettings,
   ProviderConnectionSettings,
+  ShortcutSettings,
   StatusTone,
   SubtitleExplainMode,
   SubtitleExplainSettings,
@@ -97,6 +99,72 @@ const OCR_LANGUAGE_OPTIONS: Array<{
   { value: "he", label: "希伯来语" },
 ];
 
+const HOTKEY_KEY_MAP: Record<string, string> = {
+  Backquote: "`",
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Equal: "=",
+  Minus: "-",
+  Period: ".",
+  Quote: "'",
+  Semicolon: ";",
+  Slash: "/",
+  Backspace: "Backspace",
+  CapsLock: "CapsLock",
+  ContextMenu: "ContextMenu",
+  Delete: "Delete",
+  End: "End",
+  Help: "Help",
+  Home: "Home",
+  Insert: "Insert",
+  PageDown: "PageDown",
+  PageUp: "PageUp",
+  Pause: "Pause",
+  PrintScreen: "PrintScreen",
+  ScrollLock: "ScrollLock",
+  Space: "Space",
+  Tab: "Tab",
+};
+
+const HOTKEY_MODIFIER_CODES = new Set([
+  "AltLeft",
+  "AltRight",
+  "ControlLeft",
+  "ControlRight",
+  "MetaLeft",
+  "MetaRight",
+  "ShiftLeft",
+  "ShiftRight",
+]);
+
+const HOTKEY_FIELDS: Array<{
+  key: keyof ShortcutSettings;
+  label: string;
+}> = [
+  {
+    key: "toggleOverlayVisibility",
+    label: "显示 / 隐藏遮挡条",
+  },
+  {
+    key: "toggleOverlayLock",
+    label: "锁定 / 解锁遮挡条",
+  },
+  {
+    key: "editOcrRegion",
+    label: "编辑 OCR 区域",
+  },
+  {
+    key: "startStaticScreenSelection",
+    label: "划词翻译",
+  },
+  {
+    key: "analyzeCurrentSubtitle",
+    label: "解析当前字幕",
+  },
+];
+
 type InlineStatus = {
   message: string;
   tone: StatusTone;
@@ -115,6 +183,7 @@ type SettingsFormState = {
   stableFrames: string;
   similarityThreshold: string;
   blankClearMs: string;
+  shortcutSettings: ShortcutSettings;
 };
 
 function cloneProfiles(
@@ -124,6 +193,10 @@ function cloneProfiles(
     openAiResponses: { ...profiles.openAiResponses },
     ollama: { ...profiles.ollama },
   };
+}
+
+function cloneShortcutSettings(shortcutSettings: ShortcutSettings): ShortcutSettings {
+  return { ...shortcutSettings };
 }
 
 function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
@@ -140,6 +213,7 @@ function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
     stableFrames: String(settings.stableFrames),
     similarityThreshold: settings.similarityThreshold.toFixed(2),
     blankClearMs: String(settings.blankClearMs),
+    shortcutSettings: cloneShortcutSettings(settings.shortcutSettings),
   };
 }
 
@@ -156,6 +230,60 @@ function normalizeProfile(
     apiKey: profile.apiKey,
     model: profile.model.trim(),
   };
+}
+
+function normalizeShortcutSettings(shortcutSettings: ShortcutSettings): ShortcutSettings {
+  return {
+    toggleOverlayVisibility: shortcutSettings.toggleOverlayVisibility.trim(),
+    toggleOverlayLock: shortcutSettings.toggleOverlayLock.trim(),
+    editOcrRegion: shortcutSettings.editOcrRegion.trim(),
+    startStaticScreenSelection: shortcutSettings.startStaticScreenSelection.trim(),
+    analyzeCurrentSubtitle: shortcutSettings.analyzeCurrentSubtitle.trim(),
+  };
+}
+
+function updateShortcutSetting(
+  shortcutSettings: ShortcutSettings,
+  key: keyof ShortcutSettings,
+  value: string,
+): ShortcutSettings {
+  return {
+    ...shortcutSettings,
+    [key]: value,
+  };
+}
+
+function findShortcutConflicts(shortcutSettings: ShortcutSettings) {
+  const conflictMap = new Map<keyof ShortcutSettings, string>();
+  const groupedKeys = new Map<string, Array<keyof ShortcutSettings>>();
+
+  for (const field of HOTKEY_FIELDS) {
+    const accelerator = shortcutSettings[field.key].trim();
+
+    if (!accelerator) {
+      continue;
+    }
+
+    const bucketKey = accelerator.toLowerCase();
+    const grouped = groupedKeys.get(bucketKey) ?? [];
+    grouped.push(field.key);
+    groupedKeys.set(bucketKey, grouped);
+  }
+
+  for (const keys of groupedKeys.values()) {
+    if (keys.length < 2) {
+      continue;
+    }
+
+    for (const key of keys) {
+      const conflictingLabels = HOTKEY_FIELDS.filter(
+        (field) => field.key !== key && keys.includes(field.key),
+      ).map((field) => field.label);
+      conflictMap.set(key, `与 ${conflictingLabels.join("、")} 冲突`);
+    }
+  }
+
+  return conflictMap;
 }
 
 function buildOcrSettings(
@@ -211,7 +339,68 @@ function buildSettings(
       fallback.similarityThreshold,
     ),
     blankClearMs: readNumber(form.blankClearMs, fallback.blankClearMs),
+    shortcutSettings: normalizeShortcutSettings(form.shortcutSettings),
   };
+}
+
+function isApplePlatform() {
+  return /Mac|iPhone|iPad|iPod/i.test(window.navigator.platform);
+}
+
+function resolveHotkeyCode(code: string) {
+  if (code.startsWith("Key")) {
+    return code.slice(3);
+  }
+
+  if (code.startsWith("Digit")) {
+    return code.slice(5);
+  }
+
+  if (code.startsWith("Numpad")) {
+    return `Num${code.slice(6)}`;
+  }
+
+  if (code.startsWith("Arrow")) {
+    return code.slice(5);
+  }
+
+  if (code.startsWith("Intl")) {
+    return code.slice(4);
+  }
+
+  if (/^F\d+$/.test(code)) {
+    return code;
+  }
+
+  return HOTKEY_KEY_MAP[code] ?? "";
+}
+
+function formatHotkey(event: ReactKeyboardEvent<HTMLInputElement>) {
+  const modifiers: string[] = [];
+
+  if (event.ctrlKey) {
+    modifiers.push("Ctrl");
+  }
+
+  if (event.shiftKey) {
+    modifiers.push("Shift");
+  }
+
+  if (event.metaKey) {
+    modifiers.push(isApplePlatform() ? "Command" : "Super");
+  }
+
+  if (event.altKey) {
+    modifiers.push("Alt");
+  }
+
+  const key = resolveHotkeyCode(event.code);
+
+  if (!key) {
+    return "";
+  }
+
+  return [...modifiers, key].join("+");
 }
 
 function providerHint(provider: SubtitleProvider) {
@@ -334,9 +523,39 @@ export function SettingsWindow() {
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [isInspectingOcr, setIsInspectingOcr] = useState(false);
   const loadedSettingsRef = useRef<SubtitleExplainSettings | null>(null);
+  const reloadOnNextFocusRef = useRef(false);
 
   const activeProfile = form?.providerProfiles[form.provider] ?? null;
   const placeholders = providerPlaceholders(form?.provider ?? "openAiResponses");
+  const shortcutConflicts = form
+    ? findShortcutConflicts(form.shortcutSettings)
+    : new Map<keyof ShortcutSettings, string>();
+
+  function applyLoadedSettings(settings: SubtitleExplainSettings) {
+    const nextForm = toFormState(settings);
+
+    loadedSettingsRef.current = settings;
+    setForm(nextForm);
+    setModelSuggestions([]);
+    setModelHint({
+      message: defaultModelHint(settings.provider),
+      tone: "idle",
+    });
+    setOcrHint({
+      message: defaultOcrHint(nextForm.ocrEngine),
+      tone: "idle",
+    });
+    setStatus({
+      message: "已加载设置。",
+      tone: "idle",
+    });
+  }
+
+  async function reloadSettings() {
+    const settings = await invoke<SubtitleExplainSettings>("load_subtitle_explain_settings");
+    applyLoadedSettings(settings);
+    void inspectOcrAvailability(toFormState(settings), settings);
+  }
 
   async function inspectOcrAvailability(
     nextForm?: SettingsFormState,
@@ -375,26 +594,7 @@ export function SettingsWindow() {
   }
 
   useEffect(() => {
-    void invoke<SubtitleExplainSettings>("load_subtitle_explain_settings")
-      .then((settings) => {
-        const nextForm = toFormState(settings);
-
-        loadedSettingsRef.current = settings;
-        setForm(nextForm);
-        setStatus({
-          message: "已加载设置。",
-          tone: "idle",
-        });
-        setModelHint({
-          message: defaultModelHint(settings.provider),
-          tone: "idle",
-        });
-        setOcrHint({
-          message: defaultOcrHint(nextForm.ocrEngine),
-          tone: "idle",
-        });
-        void inspectOcrAvailability(nextForm, settings);
-      })
+    void reloadSettings()
       .catch((error) => {
         setStatus({
           message: `初始化失败：${String(error)}`,
@@ -405,6 +605,10 @@ export function SettingsWindow() {
 
   async function dismissWindow() {
     try {
+      if (loadedSettingsRef.current) {
+        applyLoadedSettings(loadedSettingsRef.current);
+      }
+      reloadOnNextFocusRef.current = true;
       await appWindow.hide();
     } catch (error) {
       setStatus({
@@ -416,6 +620,14 @@ export function SettingsWindow() {
 
   async function saveSettings() {
     if (isSaving || !form || !loadedSettingsRef.current) {
+      return;
+    }
+
+    if (shortcutConflicts.size > 0) {
+      setStatus({
+        message: "快捷键存在冲突，请调整后再保存。",
+        tone: "error",
+      });
       return;
     }
 
@@ -559,6 +771,13 @@ export function SettingsWindow() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.dataset.hotkeyInput === "true"
+      ) {
+        return;
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveSettings();
@@ -575,6 +794,113 @@ export function SettingsWindow() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   });
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenCloseRequested: (() => void) | null = null;
+    let unlistenFocusChanged: (() => void) | null = null;
+
+    void appWindow.onCloseRequested(async (event) => {
+      event.preventDefault();
+      if (disposed) {
+        return;
+      }
+      await dismissWindow();
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenCloseRequested = unlisten;
+    });
+
+    void appWindow.onFocusChanged(({ payload: focused }) => {
+      if (!focused || !reloadOnNextFocusRef.current) {
+        return;
+      }
+
+      reloadOnNextFocusRef.current = false;
+      void reloadSettings().catch((error) => {
+        setStatus({
+          message: `重新加载失败：${String(error)}`,
+          tone: "error",
+        });
+      });
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenFocusChanged = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenCloseRequested?.();
+      unlistenFocusChanged?.();
+    };
+  }, []);
+
+  function handleHotkeyKeyDown(
+    event: ReactKeyboardEvent<HTMLInputElement>,
+    key: keyof ShortcutSettings,
+  ) {
+    if (!form) {
+      return;
+    }
+
+    if (
+      event.key === "Tab" &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.metaKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === "Backspace") {
+      setForm((currentForm) =>
+        currentForm
+          ? {
+              ...currentForm,
+              shortcutSettings: updateShortcutSetting(
+                currentForm.shortcutSettings,
+                key,
+                "",
+              ),
+            }
+          : currentForm,
+      );
+      return;
+    }
+
+    if (HOTKEY_MODIFIER_CODES.has(event.code)) {
+      return;
+    }
+
+    const nextHotkey = formatHotkey(event);
+
+    if (!nextHotkey) {
+      return;
+    }
+
+    setForm((currentForm) =>
+      currentForm
+        ? {
+            ...currentForm,
+            shortcutSettings: updateShortcutSetting(
+              currentForm.shortcutSettings,
+              key,
+              nextHotkey,
+            ),
+          }
+        : currentForm,
+    );
+  }
 
   return (
     <main className="settings-shell">
@@ -758,6 +1084,37 @@ export function SettingsWindow() {
             {trayClickActionHint(form?.trayClickAction ?? "overlay")}
           </span>
         </label>
+      </section>
+
+      <section className="settings-card section-grid two-columns">
+        <div className="section-head full-span">
+          <div>
+            <h2>快捷键</h2>
+          </div>
+        </div>
+        {HOTKEY_FIELDS.map((field) => (
+          <label key={field.key} className="field">
+            <span className="field-label">{field.label}</span>
+            <input
+              className="text-input hotkey-input"
+              type="text"
+              readOnly
+              spellCheck="false"
+              data-hotkey-input="true"
+              data-conflict={shortcutConflicts.has(field.key) ? "true" : "false"}
+              placeholder="按下组合键"
+              value={form?.shortcutSettings[field.key] ?? ""}
+              onKeyDown={(event) => {
+                handleHotkeyKeyDown(event, field.key);
+              }}
+            />
+            {shortcutConflicts.has(field.key) ? (
+              <span className="field-help" data-tone="error">
+                {shortcutConflicts.get(field.key)}
+              </span>
+            ) : null}
+          </label>
+        ))}
       </section>
 
       <section className="settings-card section-grid">

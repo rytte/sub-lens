@@ -119,6 +119,14 @@ export type SubtitleProviderProfiles = {
   ollama: ProviderConnectionSettings;
 };
 
+export type ShortcutSettings = {
+  toggleOverlayVisibility: string;
+  toggleOverlayLock: string;
+  editOcrRegion: string;
+  startStaticScreenSelection: string;
+  analyzeCurrentSubtitle: string;
+};
+
 export type SubtitleExplainSettings = {
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
@@ -133,6 +141,7 @@ export type SubtitleExplainSettings = {
   stableFrames: number;
   similarityThreshold: number;
   blankClearMs: number;
+  shortcutSettings: ShortcutSettings;
 };
 
 export type SubtitlePhrase = {
