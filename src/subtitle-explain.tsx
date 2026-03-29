@@ -38,6 +38,9 @@ const STYLE_MODE_STORAGE_KEY = "subtitle-explain-style-mode";
 const CONTRAST_OUTLINE_STORAGE_KEY = "subtitle-explain-contrast-outline-enabled";
 const FONT_SCALE_STORAGE_KEY = "subtitle-explain-font-scale";
 const AUTO_HEIGHT_STORAGE_KEY = "subtitle-explain-auto-height-enabled";
+const HOVERED_BACKGROUND_OPACITY_STORAGE_KEY =
+  "subtitle-explain-hovered-background-opacity";
+const IDLE_BACKGROUND_OPACITY_STORAGE_KEY = "subtitle-explain-idle-background-opacity";
 const WINDOW_MIN_WIDTH = 360;
 const WINDOW_MIN_HEIGHT = 140;
 const AUTO_HEIGHT_MAX_WINDOW_HEIGHT = 880;
@@ -150,6 +153,30 @@ function loadAutoHeightEnabled() {
   }
 }
 
+function clampBackgroundOpacity(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function loadBackgroundOpacity(key: string) {
+  try {
+    const storedValue = window.localStorage.getItem(key);
+
+    if (storedValue === null) {
+      return null;
+    }
+
+    const parsedValue = Number.parseFloat(storedValue);
+
+    if (!Number.isFinite(parsedValue)) {
+      return null;
+    }
+
+    return clampBackgroundOpacity(parsedValue);
+  } catch {
+    return null;
+  }
+}
+
 function fontScaleToSliderValue(value: FontScale) {
   const sliderValue = FONT_SCALE_VALUES.indexOf(value);
 
@@ -170,6 +197,32 @@ function fontScaleFromSliderValue(value: string): FontScale {
 
 function fontScaleLabel(value: FontScale) {
   return `${Math.round(Number(value) * 100)}%`;
+}
+
+function defaultHoveredBackgroundOpacity(styleMode: StyleMode) {
+  return styleMode === "default" ? 1 : 0.66;
+}
+
+function defaultIdleBackgroundOpacity(styleMode: StyleMode) {
+  return styleMode === "default" ? 1 : 0;
+}
+
+function backgroundOpacityToSliderValue(value: number) {
+  return String(Math.round(clampBackgroundOpacity(value) * 100));
+}
+
+function backgroundOpacityFromSliderValue(value: string) {
+  const sliderValue = Number.parseInt(value, 10);
+
+  if (Number.isNaN(sliderValue)) {
+    return 0;
+  }
+
+  return clampBackgroundOpacity(sliderValue / 100);
+}
+
+function backgroundOpacityLabel(value: number) {
+  return `${Math.round(clampBackgroundOpacity(value) * 100)}%`;
 }
 
 function phrasesSectionTitle(explainMode: SubtitleExplainMode) {
@@ -215,6 +268,12 @@ export function SubtitleExplainWindow() {
   );
   const [fontScale, setFontScale] = useState<FontScale>(loadFontScale);
   const [autoHeightEnabled, setAutoHeightEnabled] = useState(loadAutoHeightEnabled);
+  const [hoveredBackgroundOpacity, setHoveredBackgroundOpacity] = useState<number | null>(() =>
+    loadBackgroundOpacity(HOVERED_BACKGROUND_OPACITY_STORAGE_KEY),
+  );
+  const [idleBackgroundOpacity, setIdleBackgroundOpacity] = useState<number | null>(() =>
+    loadBackgroundOpacity(IDLE_BACKGROUND_OPACITY_STORAGE_KEY),
+  );
   const [explainMode, setExplainMode] = useState<SubtitleExplainMode>("word");
   const [subtitleSettings, setSubtitleSettings] =
     useState<SubtitleExplainSettings | null>(null);
@@ -793,8 +852,22 @@ export function SubtitleExplainWindow() {
 
   const analyzing = manualAnalyzePending || Boolean(status?.analyzing);
   const realtimeEnabled = Boolean(subtitleSettings?.realtimeEnabled);
+  const resolvedHoveredBackgroundOpacity =
+    hoveredBackgroundOpacity ?? defaultHoveredBackgroundOpacity(styleMode);
+  const resolvedIdleBackgroundOpacity =
+    idleBackgroundOpacity ?? defaultIdleBackgroundOpacity(styleMode);
   const windowStyle = {
     "--content-font-scale": fontScale,
+    ...(hoveredBackgroundOpacity === null
+      ? {}
+      : {
+          "--window-bg-hover-opacity": hoveredBackgroundOpacity.toFixed(2),
+        }),
+    ...(idleBackgroundOpacity === null
+      ? {}
+      : {
+          "--window-bg-idle-opacity": idleBackgroundOpacity.toFixed(2),
+        }),
   } as CSSProperties;
   const phrases = result?.phrases ?? [];
   const sourceText = result?.sourceText || "等待 OCR 结果...";
@@ -803,6 +876,12 @@ export function SubtitleExplainWindow() {
   const hasTranslation = Boolean(result?.translation);
   const hasPhrases = phrases.length > 0;
   const fontScaleSliderValue = fontScaleToSliderValue(fontScale);
+  const hoveredBackgroundOpacitySliderValue = backgroundOpacityToSliderValue(
+    resolvedHoveredBackgroundOpacity,
+  );
+  const idleBackgroundOpacitySliderValue = backgroundOpacityToSliderValue(
+    resolvedIdleBackgroundOpacity,
+  );
 
   return (
     <main
@@ -810,7 +889,7 @@ export function SubtitleExplainWindow() {
       className="subtitle-window"
       data-style-mode={styleMode}
       data-contrast-outline={contrastOutlineEnabled ? "true" : "false"}
-      data-hovered={styleMode !== "default" && windowHovered ? "true" : "false"}
+      data-hovered={windowHovered ? "true" : "false"}
       data-collapsed={collapsed ? "true" : "false"}
       style={windowStyle}
       onPointerEnter={() => {
@@ -968,6 +1047,95 @@ export function SubtitleExplainWindow() {
                       {option.label}
                     </button>
                   ))}
+                </div>
+              </section>
+
+              <section className="settings-group">
+                <p className="settings-group-title">背景透明度</p>
+                <div className="settings-slider-stack">
+                  <div className="settings-slider-block">
+                    <div className="settings-slider-header">
+                      <p className="settings-slider-title">鼠标在窗口内</p>
+                      <output
+                        className="settings-slider-value"
+                        htmlFor="hoveredBackgroundOpacitySlider"
+                      >
+                        {backgroundOpacityLabel(resolvedHoveredBackgroundOpacity)}
+                      </output>
+                    </div>
+                    <div className="settings-slider">
+                      <input
+                        id="hoveredBackgroundOpacitySlider"
+                        className="settings-slider-input"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={hoveredBackgroundOpacitySliderValue}
+                        aria-label="调节鼠标在窗口内时的背景透明度"
+                        aria-valuetext={backgroundOpacityLabel(
+                          resolvedHoveredBackgroundOpacity,
+                        )}
+                        onChange={(event) => {
+                          const nextOpacity = backgroundOpacityFromSliderValue(
+                            event.target.value,
+                          );
+
+                          setHoveredBackgroundOpacity(nextOpacity);
+                          persistSetting(
+                            HOVERED_BACKGROUND_OPACITY_STORAGE_KEY,
+                            nextOpacity.toFixed(2),
+                          );
+                        }}
+                      />
+                      <div className="settings-slider-labels" aria-hidden="true">
+                        <span>0%</span>
+                        <span>50%</span>
+                        <span>100%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-slider-block">
+                    <div className="settings-slider-header">
+                      <p className="settings-slider-title">鼠标在窗口外</p>
+                      <output
+                        className="settings-slider-value"
+                        htmlFor="idleBackgroundOpacitySlider"
+                      >
+                        {backgroundOpacityLabel(resolvedIdleBackgroundOpacity)}
+                      </output>
+                    </div>
+                    <div className="settings-slider">
+                      <input
+                        id="idleBackgroundOpacitySlider"
+                        className="settings-slider-input"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={idleBackgroundOpacitySliderValue}
+                        aria-label="调节鼠标在窗口外时的背景透明度"
+                        aria-valuetext={backgroundOpacityLabel(resolvedIdleBackgroundOpacity)}
+                        onChange={(event) => {
+                          const nextOpacity = backgroundOpacityFromSliderValue(
+                            event.target.value,
+                          );
+
+                          setIdleBackgroundOpacity(nextOpacity);
+                          persistSetting(
+                            IDLE_BACKGROUND_OPACITY_STORAGE_KEY,
+                            nextOpacity.toFixed(2),
+                          );
+                        }}
+                      />
+                      <div className="settings-slider-labels" aria-hidden="true">
+                        <span>0%</span>
+                        <span>50%</span>
+                        <span>100%</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </section>
 
