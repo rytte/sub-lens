@@ -20,6 +20,9 @@ import type {
 } from "./shared/types";
 
 const appWindow = getCurrentWindow();
+const SETTINGS_THEME_STORAGE_KEY = "settings-theme";
+
+type SettingsTheme = "dark" | "light";
 
 const TRAY_CLICK_ACTION_OPTIONS: Array<{
   value: TrayClickAction;
@@ -403,6 +406,58 @@ function formatHotkey(event: ReactKeyboardEvent<HTMLInputElement>) {
   return [...modifiers, key].join("+");
 }
 
+function loadSettingsTheme(): SettingsTheme {
+  try {
+    return window.localStorage.getItem(SETTINGS_THEME_STORAGE_KEY) === "light"
+      ? "light"
+      : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function ThemeMoonIcon() {
+  return (
+    <svg
+      className="theme-toggle-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 15.2A8.6 8.6 0 1 1 12.8 4 6.8 6.8 0 0 0 20 15.2Z" />
+    </svg>
+  );
+}
+
+function ThemeSunIcon() {
+  return (
+    <svg
+      className="theme-toggle-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4.2" />
+      <path d="M12 2.8v2.4" />
+      <path d="M12 18.8v2.4" />
+      <path d="M21.2 12h-2.4" />
+      <path d="M5.2 12H2.8" />
+      <path d="m18.5 5.5-1.7 1.7" />
+      <path d="m7.2 16.8-1.7 1.7" />
+      <path d="m18.5 18.5-1.7-1.7" />
+      <path d="M7.2 7.2 5.5 5.5" />
+    </svg>
+  );
+}
+
 function providerHint(provider: SubtitleProvider) {
   if (provider === "openAiResponses") {
     return "推荐填写 OpenAI 兼容地址，例如 https://api.openai.com/v1，并提供对应 API Key。";
@@ -504,6 +559,7 @@ function engineStatusLabel(item: OcrEngineAvailability) {
 }
 
 export function SettingsWindow() {
+  const [theme, setTheme] = useState<SettingsTheme>(loadSettingsTheme);
   const [form, setForm] = useState<SettingsFormState | null>(null);
   const [status, setStatus] = useState<InlineStatus>({
     message: "正在加载设置...",
@@ -592,6 +648,16 @@ export function SettingsWindow() {
       setIsInspectingOcr(false);
     }
   }
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+
+    try {
+      window.localStorage.setItem(SETTINGS_THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore storage failures and keep the in-memory theme.
+    }
+  }, [theme]);
 
   useEffect(() => {
     void reloadSettings()
@@ -912,14 +978,35 @@ export function SettingsWindow() {
             在这里统一管理 OCR 引擎、字幕解释 Provider 和实时识别参数。
           </p>
         </div>
-        <div className="hero-tags" aria-label="能力范围">
-          <span className="tag">Windows OCR</span>
-          <span className="tag">Tesseract.js</span>
-          <span className="tag">EasyOCR</span>
-          <span className="tag">RapidOCR</span>
-          <span className="tag">PaddleOCR</span>
-          <span className="tag">OpenAI Responses</span>
-          <span className="tag">Ollama</span>
+        <div className="hero-side">
+          <div className="theme-toggle" aria-label="主题">
+            <button
+              className="theme-toggle-button"
+              type="button"
+              data-active={theme === "dark" ? "true" : "false"}
+              aria-label="深色主题"
+              aria-pressed={theme === "dark"}
+              title="深色主题"
+              onClick={() => {
+                setTheme("dark");
+              }}
+            >
+              <ThemeMoonIcon />
+            </button>
+            <button
+              className="theme-toggle-button"
+              type="button"
+              data-active={theme === "light" ? "true" : "false"}
+              aria-label="浅色主题"
+              aria-pressed={theme === "light"}
+              title="浅色主题"
+              onClick={() => {
+                setTheme("light");
+              }}
+            >
+              <ThemeSunIcon />
+            </button>
+          </div>
         </div>
       </header>
 
