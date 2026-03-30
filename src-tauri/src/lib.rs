@@ -50,6 +50,7 @@ const EVENT_OCR_REGION_DRAW_REQUEST: &str = "ocr-region://draw-request";
 const EVENT_OCR_RUNTIME_REQUEST: &str = "ocr-runtime://request";
 const EVENT_SUBTITLE_STATUS_CHANGED: &str = "subtitle://status";
 const EVENT_SUBTITLE_RESULT_CHANGED: &str = "subtitle://result";
+const SIDECAR_EVENT_SUBTITLE_PARTIAL: &str = "subtitle_partial";
 const STORE_PATH: &str = "overlay-settings.json";
 const STORE_KEY_OVERLAY: &str = "overlay";
 const STORE_KEY_OCR_REGION: &str = "ocrRegion";
@@ -194,6 +195,19 @@ impl Default for SubtitleExplainMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+enum SubtitleResponseMode {
+    Structured,
+    Fast,
+}
+
+impl Default for SubtitleResponseMode {
+    fn default() -> Self {
+        Self::Structured
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 enum TrayClickAction {
     Overlay,
     SubtitleExplain,
@@ -266,6 +280,7 @@ struct SubtitleExplainSettingsPayload {
     realtime_enabled: bool,
     provider: SubtitleProvider,
     explain_mode: SubtitleExplainMode,
+    response_mode: SubtitleResponseMode,
     tray_click_action: TrayClickAction,
     base_url: String,
     api_key: String,
@@ -340,8 +355,10 @@ struct SubtitlePhrasePayload {
 #[serde(rename_all = "camelCase")]
 struct SubtitleAnalysisResultPayload {
     source_text: String,
+    response_mode: SubtitleResponseMode,
     translation: String,
     phrases: Vec<SubtitlePhrasePayload>,
+    raw_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,6 +425,13 @@ struct SidecarResponse<T> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarEvent<T> {
+    event: String,
+    payload: T,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenAiModelsResponse {
     data: Vec<OpenAiModelItem>,
 }
@@ -461,6 +485,7 @@ impl Default for SubtitleExplainSettingsPayload {
             model: active_profile.model,
             provider,
             explain_mode: SubtitleExplainMode::default(),
+            response_mode: SubtitleResponseMode::default(),
             tray_click_action: TrayClickAction::default(),
             provider_profiles,
             ocr_settings: OcrSettingsPayload::default(),
@@ -1558,6 +1583,17 @@ fn save_subtitle_explain_mode(
 }
 
 #[tauri::command]
+fn save_subtitle_response_mode(
+    app: AppHandle,
+    response_mode: SubtitleResponseMode,
+) -> Result<SubtitleResponseMode, String> {
+    let mut settings = current_subtitle_settings(&app)?;
+    settings.response_mode = response_mode;
+    let settings = save_runtime_subtitle_settings(&app, settings)?;
+    Ok(settings.response_mode)
+}
+
+#[tauri::command]
 fn reset_subtitle_explain_settings(
     app: AppHandle,
 ) -> Result<SubtitleExplainSettingsPayload, String> {
@@ -1787,6 +1823,7 @@ pub fn run() {
             load_subtitle_explain_mode,
             save_subtitle_explain_settings,
             save_subtitle_explain_mode,
+            save_subtitle_response_mode,
             reset_subtitle_explain_settings,
             inspect_ocr_engines,
             notify_ocr_runtime_ready,

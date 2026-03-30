@@ -527,6 +527,49 @@ output {
   padding-top: 8px;
 }
 
+.block-fast {
+  padding-top: 8px;
+}
+
+.fast-text {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: var(--summary-text-size);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.fast-text > :first-child {
+  margin-top: 0;
+}
+
+.fast-text > :last-child {
+  margin-bottom: 0;
+}
+
+.fast-markdown-paragraph {
+  margin: 0;
+}
+
+.fast-markdown-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.fast-markdown-list-item {
+  padding-left: 2px;
+}
+
+.fast-text strong {
+  color: #dce9ff;
+  font-weight: 700;
+}
+
 .subtitle-window[data-collapsed="true"] .status-meta,
 .subtitle-window[data-collapsed="true"] .settings-menu,
 .subtitle-window[data-collapsed="true"] #staticSelectionButton,
@@ -534,7 +577,8 @@ output {
 .subtitle-window[data-collapsed="true"] #editOcrButton,
 .subtitle-window[data-collapsed="true"] #realtimeToggleButton,
 .subtitle-window[data-collapsed="true"] #analyzeButton,
-.subtitle-window[data-collapsed="true"] .block-summary {
+.subtitle-window[data-collapsed="true"] .block-summary,
+.subtitle-window[data-collapsed="true"] .block-fast {
   display: none;
 }
 
@@ -635,6 +679,7 @@ output {
 .subtitle-window[data-style-mode="contrast"] .summary-label,
 .subtitle-window[data-style-mode="contrast"] .block-title,
 .subtitle-window[data-style-mode="contrast"] .summary-text,
+.subtitle-window[data-style-mode="contrast"] .fast-text,
 .subtitle-window[data-style-mode="contrast"] .phrase-item span,
 .subtitle-window[data-style-mode="contrast"] .action-button {
   color: rgba(0, 0, 0, 0.82);
@@ -689,6 +734,10 @@ output {
 .subtitle-window[data-style-mode="contrast"] .phrase-item strong {
   color: #111111;
   font-weight: 800;
+}
+
+.subtitle-window[data-style-mode="contrast"] .fast-text strong {
+  color: #111111;
 }
 
 .subtitle-window[data-style-mode="contrast"] .settings-popover {
@@ -759,9 +808,14 @@ output {
 .subtitle-window[data-style-mode="contrastLight"] .summary-label,
 .subtitle-window[data-style-mode="contrastLight"] .block-title,
 .subtitle-window[data-style-mode="contrastLight"] .summary-text,
+.subtitle-window[data-style-mode="contrastLight"] .fast-text,
 .subtitle-window[data-style-mode="contrastLight"] .phrase-item span,
 .subtitle-window[data-style-mode="contrastLight"] .action-button {
   color: rgba(255, 255, 255, 0.82);
+}
+
+.subtitle-window[data-style-mode="contrastLight"] .fast-text strong {
+  color: #ffffff;
 }
 
 .subtitle-window[data-style-mode="contrastLight"] .summary-divider {
@@ -900,6 +954,7 @@ output {
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .summary-label,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .block-title,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .summary-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .fast-text,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .phrase-item strong,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .phrase-item span,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrast"] .empty,
@@ -907,6 +962,7 @@ output {
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .summary-label,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .block-title,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .summary-text,
+.subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .fast-text,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .phrase-item strong,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .phrase-item span,
 .subtitle-window[data-contrast-outline="true"][data-style-mode="contrastLight"] .empty {

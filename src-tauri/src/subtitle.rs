@@ -177,6 +177,70 @@ where
         .ok_or_else(|| "sidecar 缺少 result 字段".to_string())
 }
 
+fn with_python_sidecar_explain_streaming<T>(
+    app: &AppHandle,
+    request: &SidecarRequest<T>,
+) -> Result<SubtitleAnalysisResultPayload, String>
+where
+    T: Serialize,
+{
+    let sidecar_state = app.state::<SidecarState>();
+    let mut process_guard = sidecar_state.0.lock().map_err(|err| err.to_string())?;
+
+    if process_guard.is_none() {
+        *process_guard = Some(spawn_python_sidecar(app)?);
+    }
+
+    let process = process_guard
+        .as_mut()
+        .ok_or_else(|| "Python sidecar 尚未初始化".to_string())?;
+
+    let request_json = serde_json::to_string(request).map_err(|err| err.to_string())?;
+    process
+        .stdin
+        .write_all(request_json.as_bytes())
+        .and_then(|_| process.stdin.write_all(b"\n"))
+        .and_then(|_| process.stdin.flush())
+        .map_err(|err| err.to_string())?;
+
+    loop {
+        let Some(response_line) = read_process_line_lossy(&mut process.stdout)? else {
+            *process_guard = None;
+            return Err("Python sidecar 已退出，请检查 Python 环境与依赖".into());
+        };
+
+        if response_line.is_empty() {
+            continue;
+        }
+
+        if let Ok(event) =
+            serde_json::from_str::<SidecarEvent<SubtitleAnalysisResultPayload>>(&response_line)
+        {
+            if event.event == SIDECAR_EVENT_SUBTITLE_PARTIAL {
+                let _ = set_subtitle_result(app, event.payload);
+                continue;
+            }
+        }
+
+        let response = serde_json::from_str::<SidecarResponse<SubtitleAnalysisResultPayload>>(
+            &response_line,
+        )
+        .map_err(|err| {
+            format!("sidecar 返回 JSON 解析失败：{err}；原始输出：{response_line}")
+        })?;
+
+        if !response.ok {
+            return Err(response
+                .error
+                .unwrap_or_else(|| "sidecar 返回未知错误".into()));
+        }
+
+        return response
+            .result
+            .ok_or_else(|| "sidecar 缺少 result 字段".to_string());
+    }
+}
+
 fn image_path_to_data_url(image_path: &Path) -> Result<String, String> {
     let bytes = fs::read(image_path).map_err(|err| err.to_string())?;
     Ok(format!(
@@ -542,6 +606,10 @@ fn explain_subtitle_text(
             settings,
         },
     };
+
+    if matches!(settings.response_mode, SubtitleResponseMode::Fast) {
+        return with_python_sidecar_explain_streaming(app, &request);
+    }
 
     with_python_sidecar::<SubtitleAnalysisResultPayload, _>(app, &request)
 }

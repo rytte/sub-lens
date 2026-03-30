@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, PointerEvent } from "react";
+import type { CSSProperties, PointerEvent, ReactNode } from "react";
 
 import { createAsyncCleanupScope } from "./shared/async-cleanup";
 import { mountWindowApp } from "./main";
@@ -24,6 +24,7 @@ import type {
   StyleMode,
   SubtitleExplainMode,
   SubtitleExplainResizeDirection,
+  SubtitleResponseMode,
   SubtitleExplainSettings,
   SubtitleExplainWindowState,
   SubtitlePhrase,
@@ -64,6 +65,14 @@ const EXPLAIN_MODE_OPTIONS: Array<{
 }> = [
   { value: "word", label: "逐词" },
   { value: "phrase", label: "短语" },
+];
+
+const RESPONSE_MODE_OPTIONS: Array<{
+  value: SubtitleResponseMode;
+  label: string;
+}> = [
+  { value: "structured", label: "结构化" },
+  { value: "fast", label: "快速" },
 ];
 
 const STYLE_MODE_OPTIONS: Array<{
@@ -233,6 +242,184 @@ function emptyPhrasesText(explainMode: SubtitleExplainMode) {
   return explainMode === "word" ? "暂无逐词解释。" : "暂无短语解释。";
 }
 
+function responseSectionTitle(
+  responseMode: SubtitleResponseMode,
+  explainMode: SubtitleExplainMode,
+) {
+  if (responseMode !== "fast") {
+    return "翻译";
+  }
+
+  return explainMode === "word" ? "快速逐词解释" : "快速短语解释";
+}
+
+function renderMarkdownInline(text: string, keyPrefix: string): ReactNode[] {
+  if (!text) {
+    return [];
+  }
+
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+
+  return parts.filter(Boolean).map((part, index) => {
+    const match = part.match(/^\*\*([^*]+)\*\*$/);
+
+    if (match) {
+      return <strong key={`${keyPrefix}-strong-${index}`}>{match[1]}</strong>;
+    }
+
+    return part;
+  });
+}
+
+function renderFastParagraph(text: string, keyPrefix: string): ReactNode | null {
+  const translationLabelMatch = text.match(/^(?:\*\*)?(翻译)(?:\*\*)?\s*([：:])?$/);
+
+  if (translationLabelMatch) {
+    return (
+      <>
+        <strong>{translationLabelMatch[1]}</strong>
+        {translationLabelMatch[2] ? "：" : null}
+      </>
+    );
+  }
+
+  const explanationLabelMatch = text.match(
+    /^(?:\*\*)?(逐词解释|短语解释)(?:\*\*)?\s*([：:])?$/,
+  );
+
+  if (explanationLabelMatch) {
+    return null;
+  }
+
+  return renderMarkdownInline(text, keyPrefix);
+}
+
+function renderFastListItem(item: string, keyPrefix: string): ReactNode {
+  if (/\*\*[^*]+\*\*/.test(item)) {
+    return renderMarkdownInline(item, keyPrefix);
+  }
+
+  const separatorIndex = item.search(/[：:]/);
+
+  if (separatorIndex <= 0) {
+    return renderMarkdownInline(item, keyPrefix);
+  }
+
+  const leadingText = item.slice(0, separatorIndex).trim();
+  const trailingText = item.slice(separatorIndex + 1).trim();
+
+  if (!leadingText || !trailingText) {
+    return renderMarkdownInline(item, keyPrefix);
+  }
+
+  return (
+    <>
+      <strong>{leadingText}</strong>
+      {"："}
+      {renderMarkdownInline(trailingText, `${keyPrefix}-tail`)}
+    </>
+  );
+}
+
+function renderFastMarkdown(rawText: string): ReactNode {
+  const lines = rawText.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let paragraphLines: string[] = [];
+  let listItems: string[] = [];
+  let listOrdered = false;
+
+  function flushParagraph() {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+
+    const text = paragraphLines.join(" ").trim();
+    if (text) {
+      const content = renderFastParagraph(text, `paragraph-${blocks.length}`);
+
+      if (!content) {
+        paragraphLines = [];
+        return;
+      }
+
+      blocks.push(
+        <p key={`paragraph-${blocks.length}`} className="fast-markdown-paragraph">
+          {content}
+        </p>,
+      );
+    }
+    paragraphLines = [];
+  }
+
+  function flushList() {
+    if (listItems.length === 0) {
+      return;
+    }
+
+    const ListTag = listOrdered ? "ol" : "ul";
+    blocks.push(
+      <ListTag key={`list-${blocks.length}`} className="fast-markdown-list">
+        {listItems.map((item, index) => (
+          <li key={`list-${blocks.length}-item-${index}`} className="fast-markdown-list-item">
+            {renderFastListItem(item, `list-${blocks.length}-item-${index}`)}
+          </li>
+        ))}
+      </ListTag>,
+    );
+    listItems = [];
+  }
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    if (!trimmedLine) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const unorderedMatch = trimmedLine.match(/^[-*+•·]\s+(.*)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (listItems.length === 0) {
+        listOrdered = false;
+      }
+      if (listOrdered) {
+        flushList();
+        listOrdered = false;
+      }
+      listItems.push(unorderedMatch[1].trim());
+      continue;
+    }
+
+    const orderedMatch = trimmedLine.match(/^\d+[.)、]\s+(.*)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listItems.length === 0) {
+        listOrdered = true;
+      }
+      if (!listOrdered) {
+        flushList();
+        listOrdered = true;
+      }
+      listItems.push(orderedMatch[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(trimmedLine);
+  }
+
+  flushParagraph();
+  flushList();
+
+  if (blocks.length === 0) {
+    return rawText;
+  }
+
+  return blocks;
+}
+
 function statusMessage(status: SubtitleStatus | null) {
   if (!status) {
     return "等待手动解析。";
@@ -275,6 +462,7 @@ export function SubtitleExplainWindow() {
     loadBackgroundOpacity(IDLE_BACKGROUND_OPACITY_STORAGE_KEY),
   );
   const [explainMode, setExplainMode] = useState<SubtitleExplainMode>("word");
+  const [responseMode, setResponseMode] = useState<SubtitleResponseMode>("structured");
   const [subtitleSettings, setSubtitleSettings] =
     useState<SubtitleExplainSettings | null>(null);
   const [ocrRegionState, setOcrRegionState] = useState<OcrRegionState | null>(null);
@@ -536,6 +724,7 @@ export function SubtitleExplainWindow() {
           setSubtitleStatus(initialStatus);
           setResult(initialResult);
           setExplainMode(initialExplainMode);
+          setResponseMode(initialSettings.responseMode);
           setSubtitleSettings(initialSettings);
           setOcrRegionState(initialOcrRegionState);
         },
@@ -599,7 +788,7 @@ export function SubtitleExplainWindow() {
 
   useEffect(() => {
     scheduleWindowSizeSync(RESIZE_SETTLE_MS);
-  }, [collapsed, fontScale, explainMode, result, status, scheduleWindowSizeSync]);
+  }, [collapsed, fontScale, explainMode, responseMode, result, status, scheduleWindowSizeSync]);
 
   useEffect(() => {
     const handlePointerDown = (event: globalThis.PointerEvent) => {
@@ -675,6 +864,7 @@ export function SubtitleExplainWindow() {
 
     const previousSettings = subtitleSettings;
     const previousExplainMode = explainMode;
+    const previousResponseMode = responseMode;
 
     try {
       setRealtimeTogglePending(true);
@@ -695,9 +885,11 @@ export function SubtitleExplainWindow() {
 
       setSubtitleSettings(savedSettings);
       setExplainMode(savedSettings.explainMode);
+      setResponseMode(savedSettings.responseMode);
     } catch (error) {
       setSubtitleSettings(previousSettings);
       setExplainMode(previousExplainMode);
+      setResponseMode(previousResponseMode);
       setSubtitleStatus({
         analyzing: false,
         stage: "error",
@@ -818,6 +1010,57 @@ export function SubtitleExplainWindow() {
       return;
     }
 
+    if (setting === "responseMode" && (value === "structured" || value === "fast")) {
+      const previousMode = responseMode;
+
+      setResponseMode(value);
+      setSubtitleSettings((currentSettings) =>
+        currentSettings
+          ? {
+              ...currentSettings,
+              responseMode: value,
+            }
+          : currentSettings,
+      );
+
+      try {
+        const savedResponseMode = await invoke<SubtitleResponseMode>(
+          "save_subtitle_response_mode",
+          {
+            responseMode: value,
+          },
+        );
+
+        setResponseMode(savedResponseMode);
+        setSubtitleSettings((currentSettings) =>
+          currentSettings
+            ? {
+                ...currentSettings,
+                responseMode: savedResponseMode,
+              }
+            : currentSettings,
+        );
+      } catch (error) {
+        setResponseMode(previousMode);
+        setSubtitleSettings((currentSettings) =>
+          currentSettings
+            ? {
+                ...currentSettings,
+                responseMode: previousMode,
+              }
+            : currentSettings,
+        );
+        setSubtitleStatus({
+          analyzing: false,
+          stage: "error",
+          message: "切换输出模式失败。",
+          error: String(error),
+        });
+      }
+
+      return;
+    }
+
     if (
       setting === "styleMode" &&
       (value === "default" || value === "contrast" || value === "contrastLight")
@@ -888,11 +1131,15 @@ export function SubtitleExplainWindow() {
         }),
   } as CSSProperties;
   const phrases = result?.phrases ?? [];
+  const resultResponseMode = result?.responseMode ?? responseMode;
+  const fastResponse = resultResponseMode === "fast";
   const sourceText = result?.sourceText || "等待 OCR 结果...";
   const translationText = result?.translation || "等待 LLM 输出...";
+  const rawText = result?.rawText || "等待 LLM 输出...";
   const hasSourceText = Boolean(result?.sourceText);
   const hasTranslation = Boolean(result?.translation);
   const hasPhrases = phrases.length > 0;
+  const hasRawText = Boolean(result?.rawText);
   const fontScaleSliderValue = fontScaleToSliderValue(fontScale);
   const hoveredBackgroundOpacitySliderValue = backgroundOpacityToSliderValue(
     resolvedHoveredBackgroundOpacity,
@@ -1039,6 +1286,27 @@ export function SubtitleExplainWindow() {
                       data-active={option.value === explainMode ? "true" : "false"}
                       onClick={() => {
                         void applySetting("explainMode", option.value);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="settings-group">
+                <p className="settings-group-title">输出</p>
+                <div className="settings-options">
+                  {RESPONSE_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      className="settings-option"
+                      type="button"
+                      data-setting="responseMode"
+                      data-value={option.value}
+                      data-active={option.value === responseMode ? "true" : "false"}
+                      onClick={() => {
+                        void applySetting("responseMode", option.value);
                       }}
                     >
                       {option.label}
@@ -1319,34 +1587,56 @@ export function SubtitleExplainWindow() {
               {sourceText}
             </p>
           </div>
-          <div className="summary-divider" aria-hidden="true"></div>
-          <div className="summary-row">
-            <span className="summary-label">翻译</span>
-            <p id="translationText" className={`summary-text ${hasTranslation ? "" : "empty"}`.trim()}>
-              {translationText}
-            </p>
-          </div>
+          {fastResponse ? null : (
+            <>
+              <div className="summary-divider" aria-hidden="true"></div>
+              <div className="summary-row">
+                <span className="summary-label">翻译</span>
+                <p
+                  id="translationText"
+                  className={`summary-text ${hasTranslation ? "" : "empty"}`.trim()}
+                >
+                  {translationText}
+                </p>
+              </div>
+            </>
+          )}
         </section>
 
-        <section className="block block-phrases">
-          <div
-            id="phrasesTitle"
-            className="block-title"
-            onPointerDown={collapsed ? handleDragStart : undefined}
-          >
-            {phrasesSectionTitle(explainMode)}
-          </div>
-          <div id="phrasesList" className={`phrase-list ${hasPhrases ? "" : "empty"}`.trim()}>
-            {hasPhrases
-              ? phrases.map((phrase: SubtitlePhrase) => (
-                  <article key={`${phrase.source}-${phrase.explanation}`} className="phrase-item">
-                    <strong>{phrase.source}</strong>
-                    <span>{phrase.explanation}</span>
-                  </article>
-                ))
-              : emptyPhrasesText(explainMode)}
-          </div>
-        </section>
+        {fastResponse ? (
+          <section className="block block-fast">
+            <div
+              id="fastTextTitle"
+              className="block-title"
+              onPointerDown={collapsed ? handleDragStart : undefined}
+            >
+              {responseSectionTitle(resultResponseMode, explainMode)}
+            </div>
+            <div id="fastText" className={`fast-text ${hasRawText ? "" : "empty"}`.trim()}>
+              {renderFastMarkdown(rawText)}
+            </div>
+          </section>
+        ) : (
+          <section className="block block-phrases">
+            <div
+              id="phrasesTitle"
+              className="block-title"
+              onPointerDown={collapsed ? handleDragStart : undefined}
+            >
+              {phrasesSectionTitle(explainMode)}
+            </div>
+            <div id="phrasesList" className={`phrase-list ${hasPhrases ? "" : "empty"}`.trim()}>
+              {hasPhrases
+                ? phrases.map((phrase: SubtitlePhrase) => (
+                    <article key={`${phrase.source}-${phrase.explanation}`} className="phrase-item">
+                      <strong>{phrase.source}</strong>
+                      <span>{phrase.explanation}</span>
+                    </article>
+                  ))
+                : emptyPhrasesText(explainMode)}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );

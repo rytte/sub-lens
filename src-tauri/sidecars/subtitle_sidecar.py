@@ -92,7 +92,55 @@ def normalize_phrase_source(source: str, *, japanese_mode: bool) -> str:
     return value.strip()
 
 
-def build_system_prompt(explain_mode: str, *, japanese_mode: bool) -> str:
+def build_system_prompt(
+    explain_mode: str,
+    response_mode: str,
+    *,
+    japanese_mode: bool,
+) -> str:
+    if response_mode == "fast":
+        if explain_mode == "word":
+            rules = [
+                "你是一个字幕学习助手。",
+                "你会收到一行 OCR 后的字幕文本，请按固定的纯文本模板输出。",
+                "要求：",
+                "1. 不要输出 JSON、代码块或额外开场白。",
+                "2. 严格按下面顺序输出两部分内容：先给翻译，再直接输出逐词解释列表。",
+                "3. 输出模板如下：",
+                "**翻译**：",
+                "<1~2 句自然中文>",
+                "",
+                "- **词或语法点**：简短解释",
+                "- **词或语法点**：简短解释",
+                "4. 不要输出“逐词解释：”这一行，翻译下面直接开始列表。",
+                "5. 逐词解释使用列表，按原句顺序列出 2~8 个关键词、语法或表达。",
+                "6. 每条都使用“**词或短语**：解释”的格式，把被解释的词或短语用 Markdown 加粗。",
+                "7. 忽略单独的标点符号。",
+            ]
+        else:
+            rules = [
+                "你是一个字幕学习助手。",
+                "你会收到一行 OCR 后的字幕文本，请按固定的纯文本模板输出。",
+                "要求：",
+                "1. 不要输出 JSON、代码块或额外开场白。",
+                "2. 严格按下面顺序输出两部分内容：先给翻译，再直接输出短语解释列表。",
+                "3. 输出模板如下：",
+                "**翻译**：",
+                "<1~2 句自然中文>",
+                "",
+                "- **短语或搭配**：简短解释",
+                "- **短语或搭配**：简短解释",
+                "4. 不要输出“短语解释：”这一行，翻译下面直接开始列表。",
+                "5. 短语解释使用列表，按原句顺序列出 2~6 个最关键的短语、搭配或语气点。",
+                "6. 每条都使用“**词或短语**：解释”的格式，把被解释的词或短语用 Markdown 加粗。",
+                "7. 忽略单独的标点符号。",
+            ]
+
+        if japanese_mode:
+            rules.append("8. 如果原句是日语，必要时可在带汉字的词后补充假名帮助理解。")
+
+        return "\n".join(rules)
+
     if explain_mode == "word":
         rules = [
             "你是一个字幕学习助手。",
@@ -134,6 +182,7 @@ easyocr_download_patched = False
 OCR_SCORE_THRESHOLD = float(os.environ.get("SUB_LENS_OCR_SCORE_THRESHOLD", "0.20"))
 HTTP_RETRY_COUNT = max(0, int(os.environ.get("SUB_LENS_HTTP_RETRY_COUNT", "2")))
 HTTP_RETRY_DELAY_MS = max(0, int(os.environ.get("SUB_LENS_HTTP_RETRY_DELAY_MS", "400")))
+SIDECAR_EVENT_SUBTITLE_PARTIAL = "subtitle_partial"
 
 
 def configure_stdio() -> None:
@@ -146,6 +195,10 @@ def configure_stdio() -> None:
 def emit(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+
+
+def emit_sidecar_event(event: str, payload: dict[str, Any]) -> None:
+    emit({"event": event, "payload": payload})
 
 
 def error_response(message: str) -> dict[str, Any]:
@@ -416,6 +469,47 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dic
             time.sleep((HTTP_RETRY_DELAY_MS / 1000) * (attempt + 1))
 
     raise RuntimeError(f"{url} 请求失败：已超过最大重试次数。")
+
+
+def iter_sse_data_events(response: Any):
+    data_lines: list[str] = []
+
+    while True:
+        raw_line = response.readline()
+        if not raw_line:
+            if data_lines:
+                yield "\n".join(data_lines)
+            break
+
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line:
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+
+        if line.startswith(":"):
+            continue
+
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+
+
+def emit_fast_subtitle_partial(source_text: str, raw_text: str) -> None:
+    cleaned_text = strip_code_fences(str(raw_text or "")).strip()
+    if not cleaned_text:
+        return
+
+    emit_sidecar_event(
+        SIDECAR_EVENT_SUBTITLE_PARTIAL,
+        {
+            "sourceText": source_text,
+            "responseMode": "fast",
+            "translation": "",
+            "phrases": [],
+            "rawText": cleaned_text,
+        },
+    )
 
 
 def should_retry_network_error(exc: BaseException) -> bool:
@@ -829,7 +923,46 @@ def subtitle_explain_language(settings: dict[str, Any]) -> str:
     return str(ocr_settings.get("language") or "auto").strip() or "auto"
 
 
-def build_user_prompt(source_text: str, explain_mode: str, *, japanese_mode: bool) -> str:
+def subtitle_response_mode(settings: dict[str, Any]) -> str:
+    response_mode = str(settings.get("responseMode") or "structured").strip()
+    return "fast" if response_mode == "fast" else "structured"
+
+
+def build_user_prompt(
+    source_text: str,
+    explain_mode: str,
+    response_mode: str,
+    *,
+    japanese_mode: bool,
+) -> str:
+    if response_mode == "fast":
+        if explain_mode == "word":
+            prompt = (
+                "请快速解释下面这句字幕，并严格按下面模板输出：\n"
+                "**翻译**：\n"
+                "<自然中文翻译>\n\n"
+                "- **词或语法点**：简短解释"
+            )
+        else:
+            prompt = (
+                "请快速解释下面这句字幕，并严格按下面模板输出：\n"
+                "**翻译**：\n"
+                "<自然中文翻译>\n\n"
+                "- **短语或搭配**：简短解释"
+            )
+
+        extra_requirements = [
+            "不要输出 JSON、代码块或额外说明。",
+            "不要输出“逐词解释：”或“短语解释：”这一行。",
+            "解释列表可以使用多条项目符号。",
+            "列表项中被解释的词或短语请使用 Markdown 加粗，例如 - **pick up**：这里表示学会。",
+            "忽略单独的标点符号。",
+        ]
+        if japanese_mode:
+            extra_requirements.append("如果是日语，必要时可给带汉字的词补充假名。")
+
+        return f"{prompt}\n" + "\n".join(extra_requirements) + f"\n\n字幕：{source_text}"
+
     if explain_mode == "word":
         prompt = (
             "请解释下面这句字幕，并尽量按原句顺序逐词或逐个语法成分拆开说明，"
@@ -877,101 +1010,7 @@ def extract_openai_output_text(response: dict[str, Any]) -> str:
     raise RuntimeError("OpenAI Responses 未返回 output_text。")
 
 
-def call_openai(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
-    api_key = str(settings.get("apiKey") or "").strip()
-    if not api_key:
-        raise RuntimeError("OpenAI Responses 需要 API Key。")
-
-    explain_mode = str(settings.get("explainMode") or "phrase")
-    language = subtitle_explain_language(settings)
-    japanese_mode = should_apply_japanese_rules(language, source_text)
-    payload = {
-        "model": settings["model"],
-        "input": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": build_system_prompt(explain_mode, japanese_mode=japanese_mode),
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": build_user_prompt(
-                            source_text,
-                            explain_mode,
-                            japanese_mode=japanese_mode,
-                        ),
-                    }
-                ],
-            },
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "subtitle_explanation",
-                "strict": True,
-                "schema": SCHEMA,
-            }
-        },
-        "store": False,
-    }
-    response = post_json(
-        normalize_base_url(str(settings["baseUrl"]), "/responses"),
-        payload,
-        {"Authorization": f"Bearer {api_key}"},
-    )
-    output_text = extract_openai_output_text(response)
-    return parse_json_text(output_text, "OpenAI Responses 输出")
-
-
-def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
-    headers: dict[str, str] = {}
-    api_key = str(settings.get("apiKey") or "").strip()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    explain_mode = str(settings.get("explainMode") or "phrase")
-    language = subtitle_explain_language(settings)
-    japanese_mode = should_apply_japanese_rules(language, source_text)
-    payload = {
-        "model": settings["model"],
-        "messages": [
-            {
-                "role": "system",
-                "content": build_system_prompt(explain_mode, japanese_mode=japanese_mode),
-            },
-            {
-                "role": "user",
-                "content": build_user_prompt(
-                    source_text,
-                    explain_mode,
-                    japanese_mode=japanese_mode,
-                ),
-            },
-        ],
-        "stream": False,
-        "think": False,
-        "format": SCHEMA,
-    }
-    response = post_json(
-        normalize_base_url(str(settings["baseUrl"]), "/api/chat"),
-        payload,
-        headers,
-    )
-    message = response.get("message", {})
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Ollama 未返回可解析的 message.content。")
-    return parse_json_text(content, "Ollama 输出")
-
-
-def normalize_result(
+def normalize_structured_result(
     source_text: str,
     llm_output: dict[str, Any],
     *,
@@ -1002,9 +1041,360 @@ def normalize_result(
 
     return {
         "sourceText": source_text,
+        "responseMode": "structured",
         "translation": str(llm_output.get("translation") or "").strip(),
         "phrases": phrases[:18],
+        "rawText": "",
     }
+
+
+def normalize_fast_result(source_text: str, raw_text: str) -> dict[str, Any]:
+    cleaned_text = strip_code_fences(str(raw_text or "")).strip()
+    if not cleaned_text:
+        raise RuntimeError("LLM 返回的快速解释为空。")
+
+    return {
+        "sourceText": source_text,
+        "responseMode": "fast",
+        "translation": "",
+        "phrases": [],
+        "rawText": cleaned_text,
+    }
+
+
+def stream_openai_fast_result(
+    settings: dict[str, Any],
+    source_text: str,
+    *,
+    explain_mode: str,
+    language: str,
+    japanese_mode: bool,
+) -> dict[str, Any]:
+    api_key = str(settings.get("apiKey") or "").strip()
+    payload = {
+        "model": settings["model"],
+        "input": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_system_prompt(
+                            explain_mode,
+                            "fast",
+                            japanese_mode=japanese_mode,
+                        ),
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_user_prompt(
+                            source_text,
+                            explain_mode,
+                            "fast",
+                            japanese_mode=japanese_mode,
+                        ),
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "store": False,
+    }
+    request = urllib.request.Request(
+        normalize_base_url(str(settings["baseUrl"]), "/responses"),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            accumulated_text = ""
+            for data in iter_sse_data_events(response):
+                if not data or data == "[DONE]":
+                    continue
+
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = str(event.get("type") or "").strip()
+                if event_type == "response.output_text.delta":
+                    delta = str(event.get("delta") or "")
+                    if delta:
+                        accumulated_text += delta
+                        emit_fast_subtitle_partial(source_text, accumulated_text)
+                    continue
+
+                if event_type == "response.output_text.done":
+                    text = event.get("text")
+                    if isinstance(text, str) and text.strip():
+                        accumulated_text = text
+                        emit_fast_subtitle_partial(source_text, accumulated_text)
+                    continue
+
+                if event_type == "response.completed":
+                    completed_response = event.get("response")
+                    if isinstance(completed_response, dict):
+                        completed_text = extract_openai_output_text(completed_response).strip()
+                        if completed_text:
+                            accumulated_text = completed_text
+                            emit_fast_subtitle_partial(source_text, accumulated_text)
+                    continue
+
+                if event_type in {"response.failed", "error"}:
+                    message = str(
+                        event.get("message")
+                        or event.get("error")
+                        or event.get("code")
+                        or "OpenAI 流式请求失败。"
+                    ).strip()
+                    raise RuntimeError(message)
+
+            return normalize_fast_result(source_text, accumulated_text)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"{normalize_base_url(str(settings['baseUrl']), '/responses')} 请求失败：{exc}"
+        ) from exc
+
+
+def stream_ollama_fast_result(
+    settings: dict[str, Any],
+    source_text: str,
+    *,
+    explain_mode: str,
+    language: str,
+    japanese_mode: bool,
+) -> dict[str, Any]:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    api_key = str(settings.get("apiKey") or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": settings["model"],
+        "messages": [
+            {
+                "role": "system",
+                "content": build_system_prompt(
+                    explain_mode,
+                    "fast",
+                    japanese_mode=japanese_mode,
+                ),
+            },
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    source_text,
+                    explain_mode,
+                    "fast",
+                    japanese_mode=japanese_mode,
+                ),
+            },
+        ],
+        "stream": True,
+        "think": False,
+    }
+    request = urllib.request.Request(
+        normalize_base_url(str(settings["baseUrl"]), "/api/chat"),
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            accumulated_text = ""
+            while True:
+                raw_line = response.readline()
+                if not raw_line:
+                    break
+
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if event.get("error"):
+                    raise RuntimeError(str(event.get("error")))
+
+                message = event.get("message")
+                content = ""
+                if isinstance(message, dict):
+                    content = str(message.get("content") or "")
+                if not content:
+                    content = str(event.get("response") or "")
+
+                if content:
+                    accumulated_text += content
+                    emit_fast_subtitle_partial(source_text, accumulated_text)
+
+                if event.get("done"):
+                    break
+
+            return normalize_fast_result(source_text, accumulated_text)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"{normalize_base_url(str(settings['baseUrl']), '/api/chat')} 请求失败：{exc}"
+        ) from exc
+
+
+def call_openai(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
+    api_key = str(settings.get("apiKey") or "").strip()
+    if not api_key:
+        raise RuntimeError("OpenAI Responses 需要 API Key。")
+
+    explain_mode = str(settings.get("explainMode") or "phrase")
+    response_mode = subtitle_response_mode(settings)
+    language = subtitle_explain_language(settings)
+    japanese_mode = should_apply_japanese_rules(language, source_text)
+    if response_mode == "fast":
+        return stream_openai_fast_result(
+            settings,
+            source_text,
+            explain_mode=explain_mode,
+            language=language,
+            japanese_mode=japanese_mode,
+        )
+
+    payload = {
+        "model": settings["model"],
+        "input": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_system_prompt(
+                            explain_mode,
+                            response_mode,
+                            japanese_mode=japanese_mode,
+                        ),
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": build_user_prompt(
+                            source_text,
+                            explain_mode,
+                            response_mode,
+                            japanese_mode=japanese_mode,
+                        ),
+                    }
+                ],
+            },
+        ],
+        "store": False,
+    }
+    if response_mode == "structured":
+        payload["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "subtitle_explanation",
+                "strict": True,
+                "schema": SCHEMA,
+            }
+        }
+
+    response = post_json(
+        normalize_base_url(str(settings["baseUrl"]), "/responses"),
+        payload,
+        {"Authorization": f"Bearer {api_key}"},
+    )
+    output_text = extract_openai_output_text(response)
+    if response_mode == "fast":
+        return normalize_fast_result(source_text, output_text)
+
+    return normalize_structured_result(
+        source_text,
+        parse_json_text(output_text, "OpenAI Responses 输出"),
+        language=language,
+    )
+
+
+def call_ollama(settings: dict[str, Any], source_text: str) -> dict[str, Any]:
+    headers: dict[str, str] = {}
+    api_key = str(settings.get("apiKey") or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    explain_mode = str(settings.get("explainMode") or "phrase")
+    response_mode = subtitle_response_mode(settings)
+    language = subtitle_explain_language(settings)
+    japanese_mode = should_apply_japanese_rules(language, source_text)
+    if response_mode == "fast":
+        return stream_ollama_fast_result(
+            settings,
+            source_text,
+            explain_mode=explain_mode,
+            language=language,
+            japanese_mode=japanese_mode,
+        )
+
+    payload = {
+        "model": settings["model"],
+        "messages": [
+            {
+                "role": "system",
+                "content": build_system_prompt(
+                    explain_mode,
+                    response_mode,
+                    japanese_mode=japanese_mode,
+                ),
+            },
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    source_text,
+                    explain_mode,
+                    response_mode,
+                    japanese_mode=japanese_mode,
+                ),
+            },
+        ],
+        "stream": False,
+        "think": False,
+    }
+    if response_mode == "structured":
+        payload["format"] = SCHEMA
+
+    response = post_json(
+        normalize_base_url(str(settings["baseUrl"]), "/api/chat"),
+        payload,
+        headers,
+    )
+    message = response.get("message", {})
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Ollama 未返回可解析的 message.content。")
+    if response_mode == "fast":
+        return normalize_fast_result(source_text, content)
+
+    return normalize_structured_result(
+        source_text,
+        parse_json_text(content, "Ollama 输出"),
+        language=language,
+    )
 
 
 def ocr_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1033,17 +1423,11 @@ def explain_subtitle(payload: dict[str, Any]) -> dict[str, Any]:
 
     provider = str(settings.get("provider") or "")
     if provider == "openAiResponses":
-        llm_output = call_openai(settings, source_text)
+        return call_openai(settings, source_text)
     elif provider == "ollama":
-        llm_output = call_ollama(settings, source_text)
+        return call_ollama(settings, source_text)
     else:
         raise RuntimeError(f"不支持的 provider：{provider}")
-
-    return normalize_result(
-        source_text,
-        llm_output,
-        language=subtitle_explain_language(settings),
-    )
 
 
 def analyze_subtitle(payload: dict[str, Any]) -> dict[str, Any]:

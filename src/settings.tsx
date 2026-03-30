@@ -13,6 +13,7 @@ import type {
   ShortcutSettings,
   StatusTone,
   SubtitleExplainMode,
+  SubtitleResponseMode,
   SubtitleExplainSettings,
   SubtitleProvider,
   SubtitleProviderProfiles,
@@ -102,6 +103,23 @@ const OCR_LANGUAGE_OPTIONS: Array<{
   { value: "he", label: "希伯来语" },
 ];
 
+const RESPONSE_MODE_OPTIONS: Array<{
+  value: SubtitleResponseMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "structured",
+    label: "结构化",
+    description: "返回翻译和分项解释，展示更稳定、更适合逐词学习。",
+  },
+  {
+    value: "fast",
+    label: "快速",
+    description: "直接输出整块文本，通常更快，但格式会更自由。",
+  },
+];
+
 const HOTKEY_KEY_MAP: Record<string, string> = {
   Backquote: "`",
   Backslash: "\\",
@@ -187,6 +205,7 @@ type SettingsFormState = {
   realtimeEnabled: boolean;
   provider: SubtitleProvider;
   explainMode: SubtitleExplainMode;
+  responseMode: SubtitleResponseMode;
   trayClickAction: TrayClickAction;
   providerProfiles: SubtitleProviderProfiles;
   ocrEngine: OcrEngine;
@@ -217,6 +236,7 @@ function toFormState(settings: SubtitleExplainSettings): SettingsFormState {
     realtimeEnabled: settings.realtimeEnabled,
     provider: settings.provider,
     explainMode: settings.explainMode,
+    responseMode: settings.responseMode,
     trayClickAction: settings.trayClickAction,
     providerProfiles: cloneProfiles(settings.providerProfiles),
     ocrEngine: settings.ocrSettings.engine,
@@ -339,6 +359,7 @@ function buildSettings(
     realtimeEnabled: form.realtimeEnabled,
     provider: form.provider,
     explainMode: form.explainMode,
+    responseMode: form.responseMode,
     trayClickAction: form.trayClickAction,
     baseUrl: activeProfile.baseUrl,
     apiKey: activeProfile.apiKey,
@@ -480,6 +501,12 @@ function trayClickActionHint(action: TrayClickAction) {
   return (
     TRAY_CLICK_ACTION_OPTIONS.find((option) => option.value === action)?.description ??
     ""
+  );
+}
+
+function responseModeHint(responseMode: SubtitleResponseMode) {
+  return (
+    RESPONSE_MODE_OPTIONS.find((option) => option.value === responseMode)?.description ?? ""
   );
 }
 
@@ -1323,6 +1350,34 @@ export function SettingsWindow() {
           </select>
         </label>
         <p className="inline-hint">{providerHint(form?.provider ?? "openAiResponses")}</p>
+        <label className="field">
+          <span className="field-label">输出模式</span>
+          <select
+            className="text-input select-input"
+            value={form?.responseMode ?? "structured"}
+            onChange={(event) => {
+              const responseMode = event.target.value as SubtitleResponseMode;
+
+              setForm((currentForm) =>
+                currentForm
+                  ? {
+                      ...currentForm,
+                      responseMode,
+                    }
+                  : currentForm,
+              );
+            }}
+          >
+            {RESPONSE_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="field-help" data-tone="idle">
+            {responseModeHint(form?.responseMode ?? "structured")}
+          </span>
+        </label>
         <label className="field">
           <span className="field-label">Base URL</span>
           <input
