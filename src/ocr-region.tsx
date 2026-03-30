@@ -272,21 +272,13 @@ export function OcrRegionWindow() {
 
     cleanupScope.register(
       appWindow.onMoved(() => {
-        void appWindow.isVisible().then((visible) => {
-          if (visible) {
-            scheduleGeometrySync();
-          }
-        });
+        scheduleGeometrySync();
       }),
     );
 
     cleanupScope.register(
       appWindow.onResized(() => {
-        void appWindow.isVisible().then((visible) => {
-          if (visible) {
-            scheduleGeometrySync();
-          }
-        });
+        scheduleGeometrySync();
       }),
     );
 

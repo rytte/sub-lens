@@ -686,21 +686,13 @@ export function SubtitleExplainWindow() {
 
     cleanupScope.register(
       appWindow.onResized(() => {
-        void appWindow.isVisible().then((visible) => {
-          if (visible) {
-            scheduleWindowStatePersist(true);
-          }
-        });
+        scheduleWindowStatePersist(true);
       }),
     );
 
     cleanupScope.register(
       appWindow.onMoved(() => {
-        void appWindow.isVisible().then((visible) => {
-          if (visible) {
-            scheduleWindowStatePersist(true);
-          }
-        });
+        scheduleWindowStatePersist(true);
       }),
     );
 
